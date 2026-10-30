@@ -1,5 +1,7 @@
 # Katkı Rehberi
 
+**Türkçe** · [🇬🇧 English](CONTRIBUTING.en.md)
+
 Diji'ye katkı için teşekkürler. Bu belge, kod tabanının **gerçek** kurallarını
 anlatır — idealize edilmiş bir stil rehberi değil, mevcut kodun uyduğu
 sözleşmeler.
@@ -403,11 +405,11 @@ Kod değişikliği dokümantasyon gerektiriyorsa aynı PR'da güncelleyin:
 
 | Değişiklik | Güncellenecek |
 |---|---|
-| Yeni/biten uç nokta | [`docs/API.md`](docs/API.md) |
-| Yeni ortam değişkeni | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) |
-| Model/arka uç değişikliği | [`docs/MODELS.md`](docs/MODELS.md) |
-| Katman/sorumluluk değişikliği | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Güvenlikle ilgili | [`SECURITY.md`](SECURITY.md) |
+| Yeni/biten uç nokta | [`docs/API.md`](docs/API.md) + [`docs/en/API.md`](docs/en/API.md) |
+| Yeni ortam değişkeni | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) + [`docs/en/CONFIGURATION.md`](docs/en/CONFIGURATION.md) |
+| Model/arka uç değişikliği | [`docs/MODELS.md`](docs/MODELS.md) + [`docs/en/MODELS.md`](docs/en/MODELS.md) |
+| Katman/sorumluluk değişikliği | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + [`docs/en/ARCHITECTURE.md`](docs/en/ARCHITECTURE.md) |
+| Güvenlikle ilgili | [`SECURITY.md`](SECURITY.md) + [`SECURITY.en.md`](SECURITY.en.md) |
 | Yeni komut/betik | [`README.md`](README.md) + [`scripts/README.md`](scripts/README.md) |
 
 Bağlantılar **göreli** olmalı (`docs/API.md`, `../agent/src/pipeline.ts`) —

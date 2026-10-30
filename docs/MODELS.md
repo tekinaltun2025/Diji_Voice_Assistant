@@ -1,5 +1,7 @@
 # Modeller
 
+**Türkçe** · [🇬🇧 English](en/MODELS.md)
+
 Diji'nin tüm ses motorları **yerel** çalışır. Konuşma, transkript ve yanıt
 metni hiçbir bulut servisine gönderilmez. Model dosyaları kod deposunda
 **tutulmaz** (`.gitignore` ağırlıkları dışlar); `~/.diji/models` altına
@@ -427,4 +429,4 @@ Ayrıntılı tanı: [ARCHITECTURE.md](ARCHITECTURE.md),
 - [ARCHITECTURE.md](ARCHITECTURE.md) — model yönetimi katmanı
 - [API.md](API.md) — `/models` ve `/models/select` sözleşmeleri
 - [CONFIGURATION.md](CONFIGURATION.md) — tüm `DIJI_*` değişkenleri
-- [SECURITY.md](../SECURITY.md) — model dosyalarının bütünlüğü, ağ erişimi
+- [SECURITY.md](../SECURITY.md) — model dosyalarının bütünlüğü, ağ erişimi ([English](../SECURITY.en.md))

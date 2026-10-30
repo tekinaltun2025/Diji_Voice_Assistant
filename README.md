@@ -1,5 +1,7 @@
 # Diji Voice Assistant
 
+**Türkçe** · [English](README.en.md)
+
 **Tamamen yerel çalışan Türkçe sesli asistan.** Bulut yok, telemetri yok, ses
 cihazdan çıkmıyor. Konuşma tanıma, seslendirme, ses etkinliği algılama ve dil
 modeli çağrılarının tamamı kendi makinenizde çalışır.
@@ -7,6 +9,18 @@ modeli çağrılarının tamamı kendi makinenizde çalışır.
 ```
 Mikrofon → VAD → Whisper (STT) → Tur dedektörü → LLM → MCP araçları → TTS → Hoparlör
 ```
+
+![Diji ana ekranı](docs/screenshots/ui-main.png)
+
+<details>
+<summary><b>Ayarlar — model seçimi</b> (görseli aç)</summary>
+
+![Ayarlar panelinde STT / LLM / TTS seçimi](docs/screenshots/ui-settings-models.png)
+
+Listeler **tamamen makinede ne varsa** ondan üretilir. Seçim
+`~/.config/diji/env` dosyasına kalıcı yazılır.
+
+</details>
 
 ---
 
@@ -91,7 +105,7 @@ arızalara izin verilmez.
 | `ui/` | Önceki Next.js arayüzü (arşiv) |
 | `scripts/` | Model indirme, kurulum, uçtan uca test, CDP doğrulama |
 
-Ayrıntılı mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+Ayrıntılı mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [English](docs/en/ARCHITECTURE.md)
 
 ### Tasarım kararları
 
@@ -287,7 +301,7 @@ Arayüz ajanı `127.0.0.1:8899` üzerinden yönetir (**yalnızca yerel**).
 | `GET /models` | Model kataloğu (Ayarlar listeleri) |
 | `POST /models/select {kind,id}` | Model değiştir + kalıcı kaydet |
 
-Tam sözleşme: [`docs/API.md`](docs/API.md)
+Tam sözleşme: [`docs/API.md`](docs/API.md) · [English](docs/en/API.md)
 
 ### Hat testleri
 
@@ -310,7 +324,7 @@ node scripts/cdp-eval.js "document.title"                      # arayüzü CDP i
 
 Farklı konum: `export DIJI_MODELS_DIR=/yol/modeller`
 
-Ayrıntılar (model boyutları, nicemleme, TTS arka uçları): [`docs/MODELS.md`](docs/MODELS.md)
+Ayrıntılar (model boyutları, nicemleme, TTS arka uçları): [`docs/MODELS.md`](docs/MODELS.md) · [English](docs/en/MODELS.md)
 
 ---
 
@@ -347,7 +361,7 @@ Tüm ayarlar ortam değişkenleriyle geçersiz kılınabilir. Kalıcı ayarlar
 
 > **Süre birimleri saniyedir.** `minSilenceDuration: 0.6` = 600 ms.
 
-Tam liste: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+Tam liste: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) · [English](docs/en/CONFIGURATION.md)
 
 ---
 
@@ -373,7 +387,7 @@ Arayüzde diyalog açılır, kalan süre sayılır.
 - **Kontrol sunucusu yalnızca yerel arayüze bağlanır** (`127.0.0.1`).
 - **Yıkıcı işlemler onay ister** ve varsayılan olarak kapalıdır.
 
-Güvenlik modeli ve tehdit değerlendirmesi: [`SECURITY.md`](SECURITY.md)
+Güvenlik modeli ve tehdit değerlendirmesi: [`SECURITY.md`](SECURITY.md) · [English](SECURITY.en.md)
 
 ---
 
@@ -478,7 +492,7 @@ npm run smoke:fast         # duman testi (ses motorlarını atla)
 ## Katkı
 
 Katkılar memnuniyetle karşılanır. Başlamadan önce
-[`CONTRIBUTING.md`](CONTRIBUTING.md) dosyasını okuyun.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) dosyasını okuyun ([English](CONTRIBUTING.en.md)).
 
 Kısa özet: TypeScript proje referansları (`tsc -b`) kullanılır, her paket
 `composite: true` olmalıdır; `console.log` **kullanılmaz** (stdout MCP
@@ -491,4 +505,4 @@ kabul edilmez.
 
 [MIT](LICENSE) © 2026 Tekin Altun
 
-Üçüncü taraf bileşenler ve model lisansları: [`docs/MODELS.md`](docs/MODELS.md)
+Üçüncü taraf bileşenler ve model lisansları: [`docs/MODELS.md`](docs/MODELS.md) · [English](docs/en/MODELS.md#licences)

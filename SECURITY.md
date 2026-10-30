@@ -1,5 +1,7 @@
 # Güvenlik Politikası
 
+**Türkçe** · [🇬🇧 English](SECURITY.en.md)
+
 Diji bir **sesli asistan**dır: mikrofonu açar, konuşmayı yerel olarak yazıya
 çevirir, yerel bir dil modeline gönderir ve yanıtı seslendirir. Ayrıca MCP
 araçlarıyla Gmail, Takvim, Drive, Notion, Slack ve tarayıcıya erişebilir.
@@ -364,8 +366,8 @@ Yanıt süresi garanti edilmez; ancak geçerli raporlar öncelikli ele alınır.
 
 ## İlgili belgeler
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — mimari, izin akışı
-- [docs/API.md](docs/API.md) — kontrol sunucusu uç noktaları
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — sır içeren değişkenler
-- [docs/MODELS.md](docs/MODELS.md) — üçüncü taraf model lisansları
-- [CONTRIBUTING.md](CONTRIBUTING.md) — katkı süreci
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — mimari, izin akışı ([English](docs/en/ARCHITECTURE.md))
+- [docs/API.md](docs/API.md) — kontrol sunucusu uç noktaları ([English](docs/en/API.md))
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — sır içeren değişkenler ([English](docs/en/CONFIGURATION.md))
+- [docs/MODELS.md](docs/MODELS.md) — üçüncü taraf model lisansları ([English](docs/en/MODELS.md))
+- [CONTRIBUTING.md](CONTRIBUTING.md) — katkı süreci ([English](CONTRIBUTING.en.md))

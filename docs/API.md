@@ -1,5 +1,7 @@
 # Ajan Kontrol API'si
 
+**Türkçe** · [🇬🇧 English](en/API.md)
+
 Ajan, çalışırken `127.0.0.1:8899` üzerinde küçük bir HTTP + SSE sunucusu açar
 ([`agent/src/control-server.ts`](../agent/src/control-server.ts)). Masaüstü
 arayüzü ajanı yalnızca bu uç noktalar üzerinden yönetir: mikrofonu, ses
@@ -629,4 +631,4 @@ Betikler hazır: [`scripts/smoke-test.js`](../scripts/smoke-test.js),
 - [ARCHITECTURE.md](ARCHITECTURE.md) — katmanlar, ses boru hattı, tur yaşam döngüsü
 - [CONFIGURATION.md](CONFIGURATION.md) — ortam değişkenleri ve `~/.config/diji/env`
 - [MODELS.md](MODELS.md) — model dosyaları, boyutlar, lisanslar
-- [SECURITY.md](../SECURITY.md) — tehdit modeli, izin kapısı
+- [SECURITY.md](../SECURITY.md) — tehdit modeli, izin kapısı ([English](../SECURITY.en.md))

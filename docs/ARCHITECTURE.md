@@ -1,5 +1,7 @@
 # Mimari
 
+**Türkçe** · [🇬🇧 English](en/ARCHITECTURE.md)
+
 Bu doküman Diji Voice Assistant'ın iç yapısını, veri akışını ve tasarım
 kararlarının gerekçelerini açıklar.
 

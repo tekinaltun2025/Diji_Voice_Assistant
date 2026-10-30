@@ -1,5 +1,7 @@
 # Diji Voice Assistant — Masaüstü Arayüzü
 
+**Türkçe** · [🇬🇧 English](README.en.md)
+
 Diji ajanının Electron + TanStack Start arayüzü. **Bağımsız bir alt projedir**:
 kendi `package.json`'ı, kendi bağımlılıkları ve kendi derleme hattı vardır.
 Kök npm workspace'e dahil **değildir**.
@@ -161,7 +163,7 @@ interface DijiAPI {
 Bu arayüz ajan API'sinin **birebir aynasıdır**. Yeni bir uç nokta eklenirse
 önce [`src/types/diji.d.ts`](src/types/diji.d.ts) güncellenir, sonra
 `electron/agent-bridge.cjs` ve `electron/preload.cjs`. Ajan sözleşmeleri için
-[`../docs/API.md`](../docs/API.md).
+[`../docs/API.md`](../docs/API.md) · [English](../docs/en/API.md).
 
 ### SSE olayları
 
@@ -215,8 +217,8 @@ Değişti: Small — dengeli · kalıcı kaydedildi
 Kalıcılık başarısız olursa (izin hatası vb.) bildirim `· yalnızca bu oturum`
 der ve nedeni ekler. **Geçersiz** seçim (`409`) dosyaya **yazılmaz**.
 
-Ayrıntılar: [`../docs/MODELS.md`](../docs/MODELS.md),
-[`../docs/API.md`](../docs/API.md#post-modelsselect).
+Ayrıntılar: [`../docs/MODELS.md`](../docs/MODELS.md) ·
+[English](../docs/en/MODELS.md), [`../docs/API.md`](../docs/API.md#post-modelsselect).
 
 ---
 
@@ -266,7 +268,10 @@ env -u ELECTRON_RUN_AS_NODE npx electron .
 
 Ajan tarafı sorunlar: [`../docs/MODELS.md`](../docs/MODELS.md),
 [`../docs/CONFIGURATION.md`](../docs/CONFIGURATION.md),
-[`../SECURITY.md`](../SECURITY.md).
+[`../SECURITY.md`](../SECURITY.md) — İngilizce:
+[`../docs/en/MODELS.md`](../docs/en/MODELS.md),
+[`../docs/en/CONFIGURATION.md`](../docs/en/CONFIGURATION.md),
+[`../SECURITY.en.md`](../SECURITY.en.md).
 
 ---
 

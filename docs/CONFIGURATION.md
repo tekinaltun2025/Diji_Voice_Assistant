@@ -1,5 +1,7 @@
 # Yapılandırma
 
+**Türkçe** · [🇬🇧 English](en/CONFIGURATION.md)
+
 Diji hiçbir ayar dosyası olmadan da açılır: tüm varsayılanlar
 [`shared/src/config/default.ts`](../shared/src/config/default.ts) içinde
 tanımlıdır. Ayar değiştirmenin üç yolu vardır ve **öncelik sırası** belirgindir.
@@ -389,4 +391,4 @@ Model seçimiyle ilgili canlı doğrulama adımları
 - [ARCHITECTURE.md](ARCHITECTURE.md) — katmanlar, ses boru hattı, tur yaşam döngüsü
 - [API.md](API.md) — uç nokta sözleşmeleri, `/models/select` ayrıntıları
 - [MODELS.md](MODELS.md) — model dosyaları, boyutlar, indirme
-- [SECURITY.md](../SECURITY.md) — sır yönetimi, izin kapısı
+- [SECURITY.md](../SECURITY.md) — sır yönetimi, izin kapısı ([English](../SECURITY.en.md))
