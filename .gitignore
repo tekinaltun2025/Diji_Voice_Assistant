@@ -1,0 +1,160 @@
+# ---------------------------------------------------------------------------
+# Bağımlılıklar
+# ---------------------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+.yarn/
+pnpm-lock.yaml.bak
+
+# ---------------------------------------------------------------------------
+# Derleme çıktıları
+# ---------------------------------------------------------------------------
+dist/
+build/
+out/
+*.tsbuildinfo
+.next/
+.tanstack/
+.vinxi/
+.nitro/
+.turbo/
+
+# ---------------------------------------------------------------------------
+# Ortam dosyaları — SIRLAR
+#
+# `~/.config/diji/env` deposunda TUTULMAZ (kullanıcıya ait konum).
+# Depoda yalnızca şablon bulunur: `.env.example`.
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.staging
+*.env
+!.env.example
+
+# Kullanıcı yapılandırması ve yerel model ağırlıkları
+config.local.json
+*.onnx
+*.gguf
+*.pt
+*.bin
+*.safetensors
+
+# ---------------------------------------------------------------------------
+# Kimlik bilgileri — asla commit'lenmez
+# ---------------------------------------------------------------------------
+credentials*.json
+*client_secret*.json
+token*.json
+*service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+oauth-tokens/
+**/tokens/
+
+# ---------------------------------------------------------------------------
+# Electron / paketleme
+# ---------------------------------------------------------------------------
+electron-dist/
+release/
+ui-app/release/
+ui-app/dist-electron/
+
+# ---------------------------------------------------------------------------
+# Çalışma alanı paketleri (kök .gitignore tek başına yeterli olsun diye)
+# ---------------------------------------------------------------------------
+agent/dist/
+agent/node_modules/
+shared/dist/
+shared/node_modules/
+ui/dist/
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# Arşiv arayüzde kaynak .ts dosyalarının YANINDA duran derlenmiş kalıntılar.
+# Depoda yalnızca kaynak (.ts/.tsx) tutulur; bunlar `ui/` arşivlenmeden önceki
+# derleme çıktılarıdır ve okunabilirliği bozar.
+ui/electron/*.js
+ui/electron/*.d.ts
+ui/electron/*.map
+ui/src/**/*.js
+ui/src/**/*.d.ts
+ui/src/**/*.map
+ui/next-env.d.ts
+ui-app/dist/
+ui-app/node_modules/
+mcp_servers/*/dist/
+mcp_servers/*/build/
+mcp_servers/*/node_modules/
+
+# ---------------------------------------------------------------------------
+# Editör / IDE
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*~
+
+# ---------------------------------------------------------------------------
+# İşletim sistemi
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# İç çalışma notları — herkese açık depoya GİRMEZ
+#
+# Sebep: bu dosyalar mutlak yerel yollar (/home/<kullanıcı>/...) ve ilgisiz
+# dış projelere atıflar içerir. Kamuya açık dokümantasyon bunların yerine
+# README.md ve docs/ altındadır.
+# ---------------------------------------------------------------------------
+memory-bank/
+plans/
+
+# ---------------------------------------------------------------------------
+# Günlükler ve geçici dosyalar
+# ---------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+*.tmp
+*.temp
+tmp/
+temp/
+.cache/
+
+# ---------------------------------------------------------------------------
+# Test / kapsam
+# ---------------------------------------------------------------------------
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# ---------------------------------------------------------------------------
+# Ses örnekleri (gizlilik): yerel kayıtlar depoya girmez
+# ---------------------------------------------------------------------------
+*.wav
+*.pcm
+*.raw
+*.mp3
+!ui-app/public/**/*.mp3

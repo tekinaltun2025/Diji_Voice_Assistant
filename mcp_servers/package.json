@@ -1,0 +1,22 @@
+{
+  "name": "@diji/mcp-servers",
+  "version": "1.0.0",
+  "description": "Diji MCP Servers - Gmail, Calendar, Drive, Notion, Slack, Chrome",
+  "private": true,
+  "workspaces": [
+    "gmail",
+    "calendar",
+    "drive",
+    "notion",
+    "slack",
+    "chrome"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "start": "npm run start --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  }
+}

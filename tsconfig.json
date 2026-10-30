@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@diji/shared": ["shared/src/index.ts"],
+      "@diji/shared/*": ["shared/src/*"],
+      "@diji/agent/*": ["agent/src/*"]
+    },
+    "composite": true,
+    "incremental": true,
+    "downlevelIteration": true,
+    "ignoreDeprecations": "5.0",
+    "tsBuildInfoFile": ".tsbuildinfo"
+  },
+  "exclude": ["node_modules", "dist", "build", ".turbo", "ui", "ui/**"],
+  "references": [
+    { "path": "./shared" },
+    { "path": "./agent" },
+    { "path": "./mcp_servers/gmail" },
+    { "path": "./mcp_servers/calendar" },
+    { "path": "./mcp_servers/drive" },
+    { "path": "./mcp_servers/notion" },
+    { "path": "./mcp_servers/slack" },
+    { "path": "./mcp_servers/chrome" }
+  ]
+}

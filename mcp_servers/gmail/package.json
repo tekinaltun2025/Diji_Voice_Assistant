@@ -1,0 +1,25 @@
+{
+  "name": "@diji/mcp-gmail",
+  "version": "1.0.0",
+  "description": "Gmail MCP Server for Diji",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsc -b --watch",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@diji/shared": "file:../../shared",
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "googleapis": "^133.0.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5"
+  }
+}

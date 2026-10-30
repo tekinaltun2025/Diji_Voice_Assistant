@@ -1,0 +1,36 @@
+/* Diji tasarım sistemi - varsayılan karanlık tema */
+
+:root {
+  /* Diji renk paleti (dark mode) */
+  --diji-primary: 59 130 246;      /* #3ba6f2 */
+  --diji-secondary: 139 92 246;   /* #8b5cf6 */
+  --diji-background: 15 23 42;    /* #0f172a */
+  --diji-surface: 30 41 59;       /* #1e2939 */
+  --diji-text: 248 250 252;       /* #f8fafc */
+  --diji-accent: 16 185 129;      /* #10b981 */
+  --diji-warning: 245 158 11;     /* #f59e0b */
+  --diji-error: 239 68 68;        /* #ef4444 */
+}
+
+/* Shadcn UI semantik renk eşlemesi (v4) */
+@layer utilities {
+  .bg-diji-primary { background-color: rgb(var(--diji-primary)); }
+  .bg-diji-secondary { background-color: rgb(var(--diji-secondary)); }
+  .bg-diji-background { background-color: rgb(var(--diji-background)); }
+  .bg-diji-surface { background-color: rgb(var(--diji-surface)); }
+  .bg-diji-text { background-color: rgb(var(--diji-text)); }
+  .bg-diji-accent { background-color: rgb(var(--diji-accent)); }
+  .bg-diji-warning { background-color: rgb(var(--diji-warning)); }
+  .bg-diji-error { background-color: rgb(var(--diji-error)); }
+}
+
+/* Global utility sınıfları */
+.diji-reaction {
+  animation: diji-reaction 1.2s ease-out infinite;
+}
+
+@keyframes diji-reaction {
+  0% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0.3; transform: scale(0.85); }
+}

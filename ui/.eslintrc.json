@@ -1,0 +1,8 @@
+{
+  "root": true,
+  "extends": ["next/core-web-vitals"],
+  "ignorePatterns": ["node_modules/", ".next/", "dist/", "build/", "electron/*.js"],
+  "rules": {
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}

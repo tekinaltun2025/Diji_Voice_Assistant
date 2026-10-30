@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Derle ve Test Et
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x]
+
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Node.js ${{ matrix.node-version }} kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Bagimliliklari kur
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Paylasilan paketi derle
+        run: npm run build:shared
+
+      - name: Ajanı derle
+        run: npm run build:agent
+
+      - name: MCP sunucularini derle
+        run: npm run build:mcp
+
+      - name: Tip kontrolu (ajan)
+        run: npx tsc --noEmit -p agent/tsconfig.json
+        continue-on-error: false
+
+      - name: Birim testleri (jest)
+        # Kok dizindeki jest.config.js, agent projesini iceren `projects`
+        # tanimini saglar. `working-directory: agent` KULLANMAYIN: o durumda
+        # kok yapilandirma yok sayilir.
+        run: npx jest --ci --silent
+
+      - name: Duman testi (model gerektirmeyen kisim)
+        run: node scripts/smoke-test.js --skip-audio
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+  ui-build:
+    name: Arayuz Derlemesi
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Node.js kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Bagimliliklari kur
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Paylasilan paketi derle
+        run: npm run build:shared
+
+      - name: Next.js derlemesi (statik disa aktarim)
+        working-directory: ui
+        run: npx next build
+
+      - name: Electron ana surec derlemesi
+        working-directory: ui
+        run: npx tsc -p electron/tsconfig.json

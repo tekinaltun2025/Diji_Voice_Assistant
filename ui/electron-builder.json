@@ -1,0 +1,37 @@
+{
+  "productName": "Diji",
+  "appId": "com.diji.assistant",
+  "electronVersion": "28.3.3",
+  "npmRebuild": false,
+  "buildDependenciesFromSource": false,
+  "directories": {
+    "output": "release",
+    "buildResources": "assets"
+  },
+  "files": [
+    "electron/dist/**/*",
+    "out/**/*",
+    "assets/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "assets",
+      "to": "assets"
+    }
+  ],
+  "extraMetadata": {
+    "main": "electron/dist/main.js"
+  },
+  "mac": {
+    "target": "dmg",
+    "category": "public.app-category.productivity"
+  },
+  "win": {
+    "target": "nsis"
+  },
+  "linux": {
+    "target": "AppImage",
+    "category": "Utility"
+  }
+}

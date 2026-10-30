@@ -1,0 +1,70 @@
+{
+  "name": "diji",
+  "version": "1.0.0",
+  "description": "Turkish Voice Assistant - Diji",
+  "private": true,
+  "workspaces": [
+    "agent",
+    "mcp_servers/*",
+    "ui",
+    "shared"
+  ],
+  "scripts": {
+    "start": "node agent/dist/index.js",
+    "start:text": "DIJI_MODE=text node agent/dist/index.js",
+    "dev": "concurrently -n agent,ui -c cyan,magenta \"npm:dev:agent\" \"npm:dev:ui\"",
+    "dev:agent": "npm run dev --workspace=agent",
+    "dev:ui": "npm run dev --workspace=ui",
+    "dev:mcp": "npm run dev --workspaces --if-present",
+    "build": "npm run build:shared && npm run build:agent && npm run build:ui && npm run build:mcp",
+    "build:shared": "npm run build --workspace=shared",
+    "build:agent": "npm run build --workspace=agent",
+    "build:ui": "npm run build --workspace=ui",
+    "build:mcp": "npm run build --workspaces --if-present --workspace=mcp_servers/gmail --workspace=mcp_servers/calendar --workspace=mcp_servers/drive --workspace=mcp_servers/notion --workspace=mcp_servers/slack --workspace=mcp_servers/chrome",
+    "lint": "npm run lint:agent && npm run lint:ui && npm run lint:mcp",
+    "lint:agent": "npm run lint --workspace=agent",
+    "lint:ui": "npm run lint --workspace=ui",
+    "lint:mcp": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck:agent && npm run typecheck:ui && npm run typecheck:mcp",
+    "typecheck:agent": "npm run typecheck --workspace=agent",
+    "typecheck:ui": "npm run typecheck --workspace=ui",
+    "typecheck:mcp": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test:agent && npm run test:ui && npm run test:mcp",
+    "test:agent": "npm run test --workspace=agent",
+    "test:ui": "npm run test --workspace=ui",
+    "test:mcp": "npm run test --workspaces --if-present",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:fast": "node scripts/smoke-test.js --skip-audio",
+    "verify:llm": "node scripts/verify-llm.js",
+    "models": "./scripts/download-models.sh all",
+    "verify": "npm run build && npm run test:agent && npm run smoke:fast",
+    "clean": "npm run clean:agent && npm run clean:ui && npm run clean:mcp && rm -rf node_modules",
+    "clean:agent": "npm run clean --workspace=agent",
+    "clean:ui": "npm run clean --workspace=ui",
+    "clean:mcp": "npm run clean --workspaces --if-present",
+    "postinstall": "npm run build:shared || echo 'shared build skipped (devDependencies may be omitted)'"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.8.0",
+    "@typescript-eslint/parser": "^7.8.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "prettier": "^3.2.5",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.5.0",
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@notionhq/client": "^2.3.0",
+    "@slack/web-api": "^7.19.0",
+    "googleapis": "^140.0.1",
+    "sherpa-onnx-node": "1.13.8"
+  }
+}
