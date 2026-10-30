@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8899/health   # {"ok":true,...}
 │    • Spawns the agent: `node agent/dist/index.js` (10–20 s to load)                │
 │    • app:// custom protocol → serves the dist/ assets                               │
 │                                                                                    │
-│  electron/preload.cjs  ──contextBridge──▶  window.diji (narrow surface, 10 methods) │
+│  electron/preload.cjs  ──contextBridge──▶  window.diji (narrow surface, 11 methods) │
 │  electron/agent-bridge.cjs                                                         │
 │    • HTTP client  (GET/POST, 127.0.0.1:8899)                                       │
 │    • SSE client   (/events → pushes events to the renderer)                        │
@@ -154,12 +154,31 @@ interface DijiAPI {
   bargeIn(): Promise<BargeInResult>;
   getModels(): Promise<ModelCatalog>;
   selectModel(kind: ModelKind, id: string): Promise<ModelSelectResult>;
+  windowControls: WindowControls;                   // minimise / maximise / close
   onTelemetry(cb: (event: TelemetryEvent) => void): () => void;
   onConnection(cb: (status: ConnectionStatus) => void): () => void;
   readonly isElectron: true;
   readonly version: string;
 }
 ```
+
+`windowControls` is the only member that does **not** mirror an agent endpoint —
+it drives the Electron window itself:
+
+```ts
+interface WindowControls {
+  minimize(): Promise<WindowActionResult>;
+  toggleMaximize(): Promise<WindowActionResult>;    // resolves with the NEW state
+  close(): Promise<WindowActionResult>;
+  isMaximized(): Promise<boolean>;
+  onMaximizedChange(cb: (maximized: boolean) => void): () => void;
+}
+```
+
+`toggleMaximize()` waits for the `maximize`/`unmaximize` **event** before
+resolving, because GTK applies the change asynchronously — reading
+`isMaximized()` straight after `win.maximize()` returns the *old* value and
+makes the header icon flash the wrong glyph. There is a 300 ms safety timeout.
 
 This interface is a **one-to-one mirror** of the agent API. When a new endpoint
 is added, [`src/types/diji.d.ts`](src/types/diji.d.ts) is updated first, then

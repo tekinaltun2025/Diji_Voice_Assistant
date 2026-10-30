@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:8899/health   # {"ok":true,...}
 │    • Ajanı spawn eder: `node agent/dist/index.js` (10-20 sn yüklenme)              │
 │    • app:// özel protokolü → dist/ varlıkları sunulur                              │
 │                                                                                    │
-│  electron/preload.cjs  ──contextBridge──▶  window.diji (dar yüzey, 10 metod)        │
+│  electron/preload.cjs  ──contextBridge──▶  window.diji (dar yüzey, 11 metod)        │
 │  electron/agent-bridge.cjs                                                                 │
 │    • HTTP istemcisi  (GET/POST, 127.0.0.1:8899)                                    │
 │    • SSE istemcisi   (/events → olayları renderer'a iter)                          │
@@ -153,12 +153,31 @@ interface DijiAPI {
   bargeIn(): Promise<BargeInResult>;
   getModels(): Promise<ModelCatalog>;
   selectModel(kind: ModelKind, id: string): Promise<ModelSelectResult>;
+  windowControls: WindowControls;                   // küçült / büyüt / kapat
   onTelemetry(cb: (event: TelemetryEvent) => void): () => void;
   onConnection(cb: (status: ConnectionStatus) => void): () => void;
   readonly isElectron: true;
   readonly version: string;
 }
 ```
+
+`windowControls`, bir ajan uç noktasının aynası **olmayan** tek üyedir —
+doğrudan Electron penceresini sürer:
+
+```ts
+interface WindowControls {
+  minimize(): Promise<WindowActionResult>;
+  toggleMaximize(): Promise<WindowActionResult>;    // YENİ durumla çözer
+  close(): Promise<WindowActionResult>;
+  isMaximized(): Promise<boolean>;
+  onMaximizedChange(cb: (maximized: boolean) => void): () => void;
+}
+```
+
+`toggleMaximize()` sonucu, `maximize`/`unmaximize` **olayı** beklendikten sonra
+verilir; çünkü GTK değişikliği eşzamanlı uygulamaz — `win.maximize()` hemen
+ardından `isMaximized()` okunursa *eski* değer döner ve başlıktaki ikon bir an
+yanlış simge gösterir. 300 ms'lik emniyet zaman aşımı vardır.
 
 Bu arayüz ajan API'sinin **birebir aynasıdır**. Yeni bir uç nokta eklenirse
 önce [`src/types/diji.d.ts`](src/types/diji.d.ts) güncellenir, sonra

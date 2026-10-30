@@ -214,7 +214,13 @@
 .quantum-brand { display: flex; align-items: center; gap: 16px; color: var(--primary); }
 .quantum-brand h1 { color: var(--foreground); font: 700 26px var(--font-display); margin: 0; }
 .quantum-brand > span { font-size: 12px; border-left: 1px solid var(--border); padding-left: 16px; color: var(--foreground); }
-.window-controls { display: flex; align-items: center; gap: 16px; }.window-controls > span { display: flex; }
+.window-controls { display: flex; align-items: center; gap: 6px; }
+/* Başlık çubuğundaki pencere düğmeleri: 28x28 hedef, şeffaf zemin,
+   yalnızca hover/focus'ta görünür vurgu. Renkler tasarım sisteminden gelir. */
+.window-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--foreground); cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
+.window-button:hover { background: var(--accent); }
+.window-button:focus-visible { outline: 1px solid var(--ring); outline-offset: 1px; }
+.window-button-close:hover { background: var(--destructive); color: var(--destructive-foreground); }
 .quantum-layout { display: grid; grid-template-columns: 174px minmax(0, 1fr) 280px; }
 .quantum-sidebar { border-right: 1px solid var(--border); padding: 22px 15px 15px; display: flex; flex-direction: column; }
 .system-controls { display: grid; gap: 5px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }

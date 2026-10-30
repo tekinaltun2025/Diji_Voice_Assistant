@@ -49,6 +49,21 @@ const api = {
   selectModel: (kind, id) =>
     ipcRenderer.invoke("diji:select-model", String(kind ?? ""), String(id ?? "")),
 
+  // ------------------------------------------------------------ pencere kontrolü
+  /**
+   * Başlık çubuğundaki pencere düğmeleri. Tarayıcıda bu nesne yoktur
+   * (`window.diji` hiç tanımlı değildir), bu yüzden çağıran taraf `?.` kullanır.
+   * Her çağrı `{ ok: boolean, maximized?: boolean }` döner.
+   */
+  windowControls: {
+    minimize: () => ipcRenderer.invoke("diji:window:minimize"),
+    toggleMaximize: () => ipcRenderer.invoke("diji:window:toggle-maximize"),
+    close: () => ipcRenderer.invoke("diji:window:close"),
+    isMaximized: () => ipcRenderer.invoke("diji:window:is-maximized"),
+    /** Büyütme durumu değiştiğinde tetiklenir; kaldırma fonksiyonu döner. */
+    onMaximizedChange: (cb) => subscribe("diji:window:maximized-changed", cb),
+  },
+
   // -------------------------------------------------------------------- olaylar
   /** SSE telemetri akışı: stage/log/turn-latency/conversation-update/snapshot. */
   onTelemetry: (cb) => subscribe("diji:telemetry", cb),

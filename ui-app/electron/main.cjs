@@ -81,6 +81,15 @@ function createWindow() {
     });
   }
 
+  // Büyütme durumu değişince başlık çubuğundaki ikon güncellensin diye
+  // renderer'a haber verilir (ayrı bir IPC olayı; yoklama yok).
+  const publishMaximized = () => {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send("diji:window:maximized-changed", win.isMaximized());
+  };
+  win.on("maximize", publishMaximized);
+  win.on("unmaximize", publishMaximized);
+
   // Pencere kapanırken referansı bırak (köprü "pencere yok" durumunu doğru görsün).
   win.on("closed", () => {
     win = null;
@@ -111,6 +120,50 @@ app.whenReady().then(() => {
   // Ayarlar ekranı: model listesi + seçim (çalışma zamanı motor değişimi).
   ipcMain.handle("diji:models", () => bridge.getModels());
   ipcMain.handle("diji:select-model", (_event, kind, id) => bridge.selectModel(kind, id));
+
+  // Başlık çubuğundaki pencere düğmeleri. Her tutamaç `{ ok, maximized? }` döner:
+  // pencere yoksa ya da yok edildiyse sessizce başarısız olur (renderer çökmez).
+  const windowResult = (mutate) => {
+    if (!win || win.isDestroyed()) return { ok: false };
+    mutate(win);
+    return { ok: true };
+  };
+  ipcMain.handle("diji:window:minimize", () => windowResult((w) => w.minimize()));
+  ipcMain.handle("diji:window:close", () => windowResult((w) => w.close()));
+
+  // Büyütme geri dönüşü, `maximize`/`unmaximize` OLAYI beklenerek verilir.
+  // Neden: GTK büyütmeyi eşzamanlı uygulamıyor; `mutate()` hemen ardından
+  // `isMaximized()` okunursa ESKİ değer döner ve arayüzdeki ikon bir an
+  // yanlış gösterir. Burada olay beklenir, 300 ms'de yanıt verilir (emniyet).
+  ipcMain.handle(
+    "diji:window:toggle-maximize",
+    () =>
+      new Promise((resolve) => {
+        if (!win || win.isDestroyed()) {
+          resolve({ ok: false });
+          return;
+        }
+        const target = win.isMaximized() ? "unmaximize" : "maximize";
+        let settled = false;
+        const finish = (maximized) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          win?.removeListener(target, onEvent);
+          resolve({ ok: true, maximized });
+        };
+        const onEvent = () => finish(win ? win.isMaximized() : false);
+        const timer = setTimeout(() => finish(win && !win.isDestroyed() ? win.isMaximized() : false), 300);
+        win.once(target, onEvent);
+        if (target === "maximize") win.maximize();
+        else win.unmaximize();
+      }),
+  );
+  // Açılışta mevcut durumu sorabilmesi için (ikon ilk boyamada doğru olsun).
+  ipcMain.handle("diji:window:is-maximized", () => {
+    if (!win || win.isDestroyed()) return false;
+    return win.isMaximized();
+  });
 });
 
 // Uygulama kapanırken SSE bağlantısını ve yeniden bağlanma zamanlayıcısını temizle.

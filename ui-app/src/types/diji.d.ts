@@ -240,6 +240,30 @@ export interface TtsResult {
 }
 
 /** `/confirm` yanıtı. */
+/**
+ * Başlık çubuğundaki pencere düğmelerinin sonucu.
+ * Pencere yoksa/yok edildiyse `ok:false` döner; renderer çökmez.
+ */
+export interface WindowActionResult {
+  ok: boolean;
+  /** `ok:true` ise pencerenin yeni büyütme durumu. */
+  maximized?: boolean;
+}
+
+/** Pencere kontrol yüzeyi — renderer'dan `ipcRenderer` görünmeden kullanılır. */
+export interface WindowControls {
+  /** Pencereyi görev çubuğuna indirir. */
+  minimize(): Promise<WindowActionResult>;
+  /** Büyütür; zaten büyütülmüşse eski boyuta döndürür. */
+  toggleMaximize(): Promise<WindowActionResult>;
+  /** Pencereyi kapatır (uygulama `window-all-closed` ile çıkar). */
+  close(): Promise<WindowActionResult>;
+  /** Açılışta mevcut büyütme durumu (ikon ilk boyamada doğru olsun). */
+  isMaximized(): Promise<boolean>;
+  /** Büyütme durumu değişim aboneliği; kaldırma fonksiyonu döner. */
+  onMaximizedChange(cb: (maximized: boolean) => void): () => void;
+}
+
 export interface ConfirmResult {
   ok: boolean;
   applied?: boolean;
@@ -292,6 +316,8 @@ export interface DijiAPI {
   getModels(): Promise<ModelCatalog>;
   /** Model değiştir (`POST /models/select`). */
   selectModel(kind: ModelKind, id: string): Promise<ModelSelectResult>;
+  /** Başlık çubuğundaki pencere düğmeleri (küçült / büyüt / kapat). */
+  windowControls: WindowControls;
   /** SSE telemetri aboneliği; kaldırma fonksiyonu döner. */
   onTelemetry(cb: (event: TelemetryEvent) => void): () => void;
   /** Bağlantı durumu aboneliği; kaldırma fonksiyonu döner. */

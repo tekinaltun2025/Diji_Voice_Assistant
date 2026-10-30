@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowUp, AudioLines, CircuitBoard, Cpu, History, MemoryStick, Mic, MicOff, PanelLeftClose, Plus, Trash2, Wifi, X, type LucideIcon } from "lucide-react";
+import { ArrowDownLeft, ArrowUp, AudioLines, CircuitBoard, Cpu, History, MemoryStick, Mic, MicOff, PanelLeftClose, Plus, Trash2, Wifi, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QuantumWave } from "@/components/quantum-wave";
 import { useAgent } from "@/hooks/use-agent";
 import type { ConversationItem, ModelKind, Stage, StageStatus } from "@/types/diji";
-import { Power, Settings2, Mail, CalendarDays, CloudSun, Globe, HardDrive, StickyNote, Hash, Brain, Activity, FileText, Box, Network, Volume2, Play, Send, MessageSquare, Minus, Maximize2 } from "lucide-react";
+import { Power, Settings2, Mail, CalendarDays, CloudSun, Globe, HardDrive, StickyNote, Hash, Brain, Activity, FileText, Box, Network, Volume2, Play, Send, MessageSquare, Minus, Maximize2, Minimize2, X } from "lucide-react";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; time: number };
 type Conversation = { id: string; title: string; updatedAt: number; messages: Message[] };
@@ -140,6 +140,8 @@ function Index() {
   const messagesEnd = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [micPending, setMicPending] = useState(false);
+  /** Pencerenin büyütülmüş olup olmadığı — başlık çubuğundaki ikonu sürer. */
+  const [maximized, setMaximized] = useState(false);
   const [eventsCleared, setEventsCleared] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Ayarlar panelindeki model değişimi geri bildirimi (durum metni). */
@@ -184,6 +186,20 @@ function Index() {
   }, [conversation, activeId]);
 
   useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [activeId, active?.messages.length]);
+
+  // Başlık çubuğundaki büyütme ikonu Electron'un gerçek durumunu yansıtsın:
+  // açılışta bir kez sorulur, sonra `maximize`/`unmaximize` olayları dinlenir
+  // (F11, masaüstü ortamının kendi kısayolları da kapsanır).
+  useEffect(() => {
+    const controls = window.diji?.windowControls;
+    if (!controls) return;
+    let active = true;
+    void controls.isMaximized().then((value) => {
+      if (active) setMaximized(Boolean(value));
+    }).catch(() => { /* durum okunamazsa varsayılan (false) korunur */ });
+    const off = controls.onMaximizedChange((value) => setMaximized(Boolean(value)));
+    return () => { active = false; off(); };
+  }, []);
 
   // Model listeleri tembeldir: LLM bölümü yerel sunucuya istek atar (~2,5 sn).
   // Bu yüzden yalnızca panel açıldığında tazelenir, açılışı yavaşlatmaz.
@@ -232,10 +248,28 @@ function Index() {
   }
 
   // Mikrofonu ajan sahiplenir; yerel MediaStream/AudioContext tamamen kaldırıldı.
-  function stopMic() {
-    if (!micOn) return;
-    setNotice("");
-    void toggleListen();
+  /**
+   * Başlık çubuğundaki pencere düğmeleri (`küçült` / `büyüt` / `kapat`).
+   * Tarayıcıda (`window.diji === undefined`) sessizce hiçbir şey yapmaz, böylece
+   * `vite dev` önizlemesi bozulmaz. Hata renderer'ı çökertmesin diye yakalanır.
+   */
+  async function windowAction(action: "minimize" | "maximize" | "close"): Promise<void> {
+    const controls = window.diji?.windowControls;
+    if (!controls) return;
+    try {
+      if (action === "minimize") {
+        await controls.minimize();
+        return;
+      }
+      if (action === "close") {
+        await controls.close();
+        return;
+      }
+      const result = await controls.toggleMaximize();
+      if (result.ok && typeof result.maximized === "boolean") setMaximized(result.maximized);
+    } catch (error) {
+      setNotice(`Pencere işlemi başarısız: ${(error as Error).message}`);
+    }
   }
 
   async function toggleMic() {
@@ -336,7 +370,11 @@ function Index() {
       <section className="quantum-console" aria-label="Jarvis sesli asistan">
         <header className="quantum-header">
           <div className="quantum-brand"><AudioLines size={25} /><h1>JARVIS</h1><span>Türkçe Sesli Asistan</span></div>
-          <div className="window-controls"><span><Minus size={15} /></span><span><Maximize2 size={13} /></span><Button variant="ghost" size="icon" title="Mikrofonu durdur" aria-label="Mikrofonu durdur" onClick={stopMic}><X size={18} /></Button></div>
+          <div className="window-controls">
+            <button type="button" className="window-button" title="Küçült" aria-label="Pencereyi küçült" onClick={() => void windowAction("minimize")}><Minus size={15} /></button>
+            <button type="button" className="window-button" title={maximized ? "Eski boyuta döndür" : "Büyüt"} aria-label={maximized ? "Pencereyi eski boyuta döndür" : "Pencereyi büyüt"} aria-pressed={maximized} onClick={() => void windowAction("maximize")}>{maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
+            <button type="button" className="window-button window-button-close" title="Kapat" aria-label="Pencereyi kapat" onClick={() => void windowAction("close")}><X size={16} /></button>
+          </div>
         </header>
         <div className="quantum-layout">
           <aside className="quantum-sidebar">
