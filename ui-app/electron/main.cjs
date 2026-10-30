@@ -54,7 +54,12 @@ function createWindow() {
 
   win = new BrowserWindow({
     width: 1280,
-    height: 800,
+    /*
+     * 800 -> 960 (%20). Sabit icerik yuksekligi (baslik 62 + sahne 460 +
+     * sohbet ~276) 800px pencereye SIGMIYORDU: sohbetin alt kismi, yani
+     * yazma alani ve mikrofon dugmesi ekranin disinda kaliyordu.
+     */
+    height: 960,
     minWidth: 460,
     minHeight: 620,
     title: "DijiAI — Türkçe Sesli Asistan",
