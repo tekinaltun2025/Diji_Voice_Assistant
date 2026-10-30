@@ -1,7 +1,7 @@
 {
   "name": "diji",
   "version": "1.0.0",
-  "description": "Turkish Voice Assistant - Diji",
+  "description": "Diji — a fully local, Turkish-first voice assistant",
   "private": true,
   "workspaces": [
     "agent",

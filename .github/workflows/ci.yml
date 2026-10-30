@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Derle ve Test Et
+    name: Build and test
     runs-on: ubuntu-22.04
     timeout-minutes: 25
 
@@ -23,38 +23,38 @@ jobs:
         node-version: [20.x]
 
     steps:
-      - name: Depoyu al
+      - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Node.js ${{ matrix.node-version }} kur
+      - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Bagimliliklari kur
+      - name: Install dependencies
         run: npm install --no-audit --no-fund --legacy-peer-deps
 
-      - name: Paylasilan paketi derle
+      - name: Build the shared package
         run: npm run build:shared
 
-      - name: Ajanı derle
+      - name: Build the agent
         run: npm run build:agent
 
-      - name: MCP sunucularini derle
+      - name: Build the MCP servers
         run: npm run build:mcp
 
-      - name: Tip kontrolu (ajan)
+      - name: Type check (agent)
         run: npx tsc --noEmit -p agent/tsconfig.json
         continue-on-error: false
 
-      - name: Birim testleri (jest)
-        # Kok dizindeki jest.config.js, agent projesini iceren `projects`
-        # tanimini saglar. `working-directory: agent` KULLANMAYIN: o durumda
-        # kok yapilandirma yok sayilir.
+      - name: Unit tests (jest)
+        # The root jest.config.js provides the `projects` definition that
+        # includes the agent project. Do NOT set `working-directory: agent`:
+        # the root configuration would then be ignored.
         run: npx jest --ci --silent
 
-      - name: Duman testi (model gerektirmeyen kisim)
+      - name: Smoke test (parts that need no models)
         run: node scripts/smoke-test.js --skip-audio
 
       - name: Lint
@@ -62,30 +62,30 @@ jobs:
         continue-on-error: true
 
   ui-build:
-    name: Arayuz Derlemesi
+    name: UI build
     runs-on: ubuntu-22.04
     timeout-minutes: 20
 
     steps:
-      - name: Depoyu al
+      - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Node.js kur
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
           cache: 'npm'
 
-      - name: Bagimliliklari kur
+      - name: Install dependencies
         run: npm install --no-audit --no-fund --legacy-peer-deps
 
-      - name: Paylasilan paketi derle
+      - name: Build the shared package
         run: npm run build:shared
 
-      - name: Next.js derlemesi (statik disa aktarim)
+      - name: Next.js build (static export)
         working-directory: ui
         run: npx next build
 
-      - name: Electron ana surec derlemesi
+      - name: Build the Electron main process
         working-directory: ui
         run: npx tsc -p electron/tsconfig.json

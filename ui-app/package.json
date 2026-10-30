@@ -89,5 +89,6 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5"
-  }
+  },
+  "description": "Diji desktop UI — Electron + TanStack Start"
 }

@@ -1,7 +1,7 @@
 {
   "name": "@diji/agent",
   "version": "1.0.0",
-  "description": "Diji LiveKit Agents pipeline",
+  "description": "Diji voice pipeline: microphone to speaker, control server, telemetry",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
