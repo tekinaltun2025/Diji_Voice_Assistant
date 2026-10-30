@@ -87,12 +87,33 @@ else
   echo "· Derleme hazır — atlandı (yenilemek için: rm -rf dist)."
 fi
 
-# --- 3) Electron ikili denetimi -------------------------------------------
-if [ ! -x "./node_modules/electron/dist/electron" ]; then
-  echo "HATA: ./node_modules/electron/dist/electron bulunamadı." >&2
-  echo "Çözüm: 'npm install' çalıştırın (Electron ikilisini de indirir)." >&2
+# --- 3) Electron ikili çözümlemesi -----------------------------------------
+# Bu depo npm workspaces kullanıyor: `ui-app/node_modules/electron` paketi
+# burada olabilir ama `dist/` (asıl ikili) kök `node_modules` altında tek
+# kopya olarak durur. `ui-app` içinde `npm install` çalıştırıldığında
+# electron'un postinstall betiği indirmeyi atlayabilir ve `dist/` hiç
+# oluşmaz — bu durumda betik "bulunamadı" deyip hiç açılmıyordu.
+# Bu yüzden sırayla denenir: yerel → kök (workspaces paylaşımı).
+ELECTRON_BIN=""
+for candidate in \
+  "./node_modules/electron/dist/electron" \
+  "../node_modules/electron/dist/electron"
+do
+  if [ -x "$candidate" ]; then
+    ELECTRON_BIN="$candidate"
+    break
+  fi
+done
+
+if [ -z "$ELECTRON_BIN" ]; then
+  echo "HATA: Electron ikilisi bulunamadı." >&2
+  echo "Denenen yollar:" >&2
+  echo "  $APP_ROOT/node_modules/electron/dist/electron" >&2
+  echo "  $(cd .. && pwd)/node_modules/electron/dist/electron" >&2
+  echo "Çözüm: proje kökünde 'npm install' çalıştırın (Electron ikilisini de indirir)." >&2
   exit 1
 fi
+echo "· Electron ikilisi: $ELECTRON_BIN"
 
 # --- 4) Başlat -------------------------------------------------------------
 EXTRA_FLAGS=()
@@ -102,4 +123,4 @@ if [ -n "${DIJI_CDP_PORT:-}" ]; then
 fi
 
 echo "· Electron penceresi açılıyor (bayrak: --no-sandbox)…"
-exec ./node_modules/electron/dist/electron electron/main.cjs --no-sandbox "${EXTRA_FLAGS[@]}"
+exec "$ELECTRON_BIN" electron/main.cjs --no-sandbox "${EXTRA_FLAGS[@]}"
