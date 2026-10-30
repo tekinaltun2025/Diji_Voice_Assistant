@@ -83,7 +83,7 @@ LOG_LEVEL=info
 ## Diagnostic and verification scripts
 
 These are the scripts referenced in
-[`../CONTRIBUTING.en.md`](../CONTRIBUTING.en.md) and in the troubleshooting
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md) and in the troubleshooting
 sections of the docs.
 
 | Script | Purpose |
@@ -123,6 +123,6 @@ CDP_PORT=9333 node scripts/cdp-screenshot.js --click "Settings" --exec 'document
 
 ## Related documents
 
-- [README.en.md](../README.md) — project overview
-- [CONTRIBUTING.en.md](../CONTRIBUTING.en.md) — build order, testing layers
-- [docs/en/CONFIGURATION.md](../docs/en/CONFIGURATION.md) — every `DIJI_*` variable
+- [../README.md](../README.md) — project overview
+- [../CONTRIBUTING.md](../CONTRIBUTING.md) — build order, testing layers
+- [../docs/CONFIGURATION.md](../docs/CONFIGURATION.md) — every `DIJI_*` variable

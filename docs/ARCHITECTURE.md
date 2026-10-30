@@ -1,396 +1,461 @@
-# Mimari
+# Architecture
 
-**Türkçe** · [🇬🇧 English](en/ARCHITECTURE.md)
+[🇹🇷 Türkçe](ARCHITECTURE.tr.md) · **English**
 
-Bu doküman Diji Voice Assistant'ın iç yapısını, veri akışını ve tasarım
-kararlarının gerekçelerini açıklar.
+This document explains the internal structure, data flow and the reasoning
+behind the design decisions in Diji Voice Assistant.
 
-- [1. Genel bakış](#1-genel-bakış)
-- [2. Katmanlar](#2-katmanlar)
-- [3. Ses boru hattı](#3-ses-boru-haddi)
-- [4. Tur yaşam döngüsü](#4-tur-yaşam-döngüsü)
-- [5. MCP entegrasyonu](#5-mcp-entegrasyonu)
-- [6. Kontrol sunucusu ve telemetri](#6-kontrol-sunucusu-ve-telemetri)
-- [7. Arayüz katmanı](#7-arayüz-katmanı)
-- [8. Model yönetimi](#8-model-yönetimi)
-- [9. Tasarım kararları](#9-tasarım-kararları)
-- [10. Bilinen sınırlar](#10-bilinen-sınırlar)
+- [1. Overview](#1-overview)
+- [2. Layers](#2-layers)
+- [3. Audio pipeline](#3-audio-pipeline)
+- [4. Turn lifecycle](#4-turn-lifecycle)
+- [5. MCP integration](#5-mcp-integration)
+- [6. Control server and telemetry](#6-control-server-and-telemetry)
+- [7. UI layer](#7-ui-layer)
+- [8. Model management](#8-model-management)
+- [9. Design decisions](#9-design-decisions)
+- [10. Known limits](#10-known-limits)
 
 ---
 
-## 1. Genel bakış
+## 1. Overview
 
-Diji üç bağımsız süreç grubundan oluşur:
+Diji consists of three independent process groups:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Electron (ui-app/)                                             │
-│  ├── main.cjs          pencere + app:// protokolü + IPC         │
-│  ├── preload.cjs       dar window.diji köprüsü                  │
-│  └── agent-bridge.cjs  HTTP/SSE istemcisi                       │
+│  ├── main.cjs          window + app:// protocol + IPC           │
+│  ├── preload.cjs       narrow window.diji bridge                │
+│  └── agent-bridge.cjs  HTTP/SSE client                          │
 └───────────────────────────┬─────────────────────────────────────┘
                             │ HTTP + SSE (127.0.0.1:8899)
 ┌───────────────────────────▼─────────────────────────────────────┐
 │  Agent (agent/)                                                 │
-│  ├── pipeline.ts       tur orkestrasyonu                        │
-│  ├── control-server.ts HTTP/SSE uç noktaları                    │
-│  ├── telemetry.ts      aşama ölçümü + olay akışı                │
-│  └── motorlar          stt · tts · vad · llm · mcp              │
+│  ├── pipeline.ts       turn orchestration                       │
+│  ├── control-server.ts HTTP/SSE endpoints                       │
+│  ├── telemetry.ts      stage measurement + event stream         │
+│  └── engines           stt · tts · vad · llm · mcp              │
 └───────────────────────────┬─────────────────────────────────────┘
-                            │ stdio JSON-RPC (her biri ayrı süreç)
+                            │ stdio JSON-RPC (one process each)
 ┌───────────────────────────▼─────────────────────────────────────┐
-│  6 MCP sunucusu (mcp_servers/)                                  │
+│  6 MCP servers (mcp_servers/)                                   │
 │  gmail · calendar · drive · notion · slack · chrome             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Ek olarak agent, **yerel LLM sunucusuna** HTTP ile bağlanır
-(`127.0.0.1:8000/v1`) ve **ALSA araçlarını** (`arecord` / `aplay`) alt süreç
-olarak çalıştırır.
+In addition, the agent talks HTTP to the **local LLM server**
+(`127.0.0.1:8000/v1`) and runs the **ALSA tools** (`arecord` / `aplay`) as
+subprocesses.
+
+**The agent is the sole owner of the audio pipeline.** The UI never opens the
+microphone — it only observes and commands through the control server.
 
 ---
 
-## 2. Katmanlar
+## 2. Layers
 
 ### `shared/`
 
-Tek doğruluk kaynağı: yapılandırma şeması, tipler, günlükleyici, izin kapısı.
+Single source of truth: configuration schema, types, logger, permission gate.
 
-| Dosya | Görev |
+| File | Responsibility |
 |---|---|
-| `config/schema.ts` | Zod şeması — çalışma zamanı doğrulaması |
-| `config/default.ts` | Ortam değişkenlerinden varsayılanlar |
-| `config/loader.ts` | `config.json` + varsayılanları derin birleştirir |
-| `permission-gate.ts` | 🟢 / 🟡 / 🔴 kural motoru |
-| `utils/logger.ts` | **stderr**'e yapılandırılmış günlük |
-| `types/*` | Ortak arayüzler |
+| `config/schema.ts` | Zod schema — runtime validation |
+| `config/default.ts` | Builds defaults from environment variables |
+| `config/loader.ts` | Deep-merges `config.json` over the defaults |
+| `permission-gate.ts` | 🟢 / 🟡 / 🔴 rule engine |
+| `utils/logger.ts` | Structured logging to **stderr** |
+| `types/*` | Shared interfaces |
 
-**Kritik kural:** `shared/utils/logger.ts` dışında hiçbir yerde `console.log`
-kullanılmaz. MCP sunucularında `stdout` yalnızca JSON-RPC protokolüne aittir;
-tek bir `console.log` protokolü bozar.
+**Critical rule:** `console.log` is used nowhere except
+`shared/utils/logger.ts`. In MCP servers `stdout` belongs exclusively to the
+JSON-RPC protocol — a single stray `console.log` corrupts the stream.
 
 ### `agent/`
 
-| Bileşen | Görev |
+| Component | Responsibility |
 |---|---|
-| `pipeline.ts` | Tur orkestrasyonu, motor yaşam döngüsü, barge-in, onay akışı |
-| `control-server.ts` | HTTP + SSE uç noktaları (`:8899`) |
-| `telemetry.ts` | Aşama durumları, tur gecikmesi, olay akışı, sohbet geçmişi |
-| `stt.ts` | sherpa-onnx Whisper + ön/son işleme |
-| `tts.ts` | Drifting TTS köprüsü + sherpa-onnx VITS yedeği |
+| `pipeline.ts` | Turn orchestration, engine lifecycle, barge-in, confirmation flow |
+| `control-server.ts` | HTTP + SSE endpoints (`:8899`) |
+| `telemetry.ts` | Stage states, turn latency, event stream, conversation history |
+| `stt.ts` | sherpa-onnx Whisper + pre/post-processing |
+| `tts.ts` | Drifting TTS bridge + sherpa-onnx VITS fallback |
 | `vad.ts` | sherpa-onnx Silero |
-| `llm.ts` | OpenAI uyumlu istemci, reasoning bütçesi, akış |
-| `mcp-client.ts` | JSON-RPC 2.0 over stdio, izin kapısı entegrasyonu |
-| `model-catalog.ts` | Diskteki/sunucudaki modelleri tarar (Ayarlar listeleri) |
-| `env-prefs.ts` | Kalıcı tercih yazımı (`~/.config/diji/env`) |
-| `turn-detector.ts` | Türkçe tur sonu sezgisi |
-| `audio-io.ts` | ALSA süreç yönetimi |
-| `audio-preprocess.ts` | DC/high-pass/kırpma/AGC |
-| `stt-postprocess.ts` | Halüsinasyon eleme, sözlük, aralık düzeltme |
-| `research/` | Ağır sorgular için arka plan işçisi |
+| `llm.ts` | OpenAI-compatible client, reasoning budget, streaming |
+| `mcp-client.ts` | JSON-RPC 2.0 over stdio, permission gate integration |
+| `model-catalog.ts` | Scans models on disk / on the server (Settings lists) |
+| `env-prefs.ts` | Persists preferences to `~/.config/diji/env` |
+| `env-bootstrap.ts` | Loads that env file before anything else |
+| `turn-detector.ts` | Turkish end-of-turn heuristics |
+| `audio-io.ts` | ALSA process management |
+| `audio-preprocess.ts` | DC / high-pass / trim / AGC |
+| `stt-postprocess.ts` | Hallucination removal, dictionary, spacing fixes |
+| `research/` | Background worker for heavy queries |
 
 ### `mcp_servers/`
 
-Her sunucu bağımsız bir paket ve bağımsız bir alt süreçtir
-(`dist/index.js`). Ajan onları başlatır, `tools/list` ile araçları toplar,
-`tools/call` ile çağırır.
+Each server is an independent package and an independent subprocess
+(`dist/index.js`). The agent spawns them, collects tools via `tools/list` and
+invokes them via `tools/call`.
 
 ### `ui-app/`
 
-TanStack Start (React 19) + Electron. Renderer saf web teknolojisiyle çalışır;
-Node yeteneği yoktur (`contextIsolation: true`, `nodeIntegration: false`).
-Erişim yalnızca `window.diji` üzerinden, dar bir yüzeyle sağlanır.
+TanStack Start (React 19) + Electron. The renderer runs with pure web
+technology and no Node capability (`contextIsolation: true`,
+`nodeIntegration: false`). Access is granted only through the narrow
+`window.diji` surface.
 
 ---
 
-## 3. Ses boru hattı
+## 3. Audio pipeline
 
 ```
-arecord (16 kHz mono PCM, ~100 ms'lik parçalar)
+arecord (16 kHz mono PCM, ~100 ms chunks)
    │
    ▼
-audio-preprocess   DC engeli · high-pass (80 Hz) · sessizlik kırpma · AGC
+audio-preprocess   DC removal · high-pass (80 Hz) · silence trim · AGC
    │
    ▼
-VAD (Silero)       konuşma var mı? → yoksa CPU harcamadan at
-   │  konuşma varsa parçalar speechBuffer'da BİRİKTİRİLİR
+VAD (Silero)       is there speech? → if not, skip without spending CPU
+   │  if speech: chunks are ACCUMULATED in speechBuffer
    ▼
-sessizlik ≥ 600 ms → segment kapanır
+silence ≥ 600 ms → the segment closes
    │
    ▼
-STT (Whisper)      TEK tampon üzerinde tanıma (100 ms'lik parçalar anlamsız)
+STT (Whisper)      recognition over the WHOLE buffer (100 ms chunks are meaningless)
    │
    ▼
-stt-postprocess    halüsinasyon eleme · sözlük · aralık düzeltme
+stt-postprocess    hallucination removal · domain dictionary · spacing repair
    │
    ▼
-turn-detector      cümle bitti mi? (dolgu kelimeleri, bağlaçlar, noktalama)
-   │  bitmediyse bir sonraki segmenti bekle
+turn detector      has the sentence actually finished? (fillers, conjunctions, punctuation)
+   │
    ▼
-handleTurnEnd()
+LLM (+ MCP tools)  local OpenAI-compatible endpoint, reasoning reserve
+   │
+   ▼
+TTS                first PCM chunk → playback queue
+   │
+   ▼
+aplay              speaker
 ```
 
-**Neden biriktirme?** Whisper cümle bağlamına ihtiyaç duyar. 100 ms'lik bir
-parça üzerinde anlamlı transkripsiyon üretilemez.
+### Why the whole buffer goes to STT
 
-**Neden sessizlik eşiği 600 ms?** Daha uzun eşik yanıtı geciktirir; daha kısa
-eşik Türkçe cümle içi duraklamalarda cümleyi ortasından keser. 600 ms,
-`VADConfig.minSilenceDuration` ile aynı seviyeye getirilmiştir (tutarlılık).
+Whisper is a sequence model: it needs context. Feeding 100 ms chunks produces
+garbage, so the pipeline accumulates the entire speech segment and transcribes
+it once. This is also why `vadMs` and `sttMs` are measured separately — the
+delay the user perceives is dominated by the silence window, not by the model.
 
-### Sessizlik ön filtresi
+### Sample-rate contract — consistent everywhere
 
-RMS `0.004` altındaki parçalar VAD'a **hiç gönderilmez**. Bu, boş kayıt
-cihazlarında CPU yakmayı ve hayalet transkripsiyonları önler.
+| Stage | Rate | Channels | Format |
+|---|---|---|---|
+| `arecord` | 16 000 Hz | mono | `S16_LE` |
+| preprocess → VAD → STT | 16 000 Hz | mono | `Float32` internally |
+| `/inject` body | 16 000 Hz | mono | PCM16, no WAV header |
+| TTS output | configurable (`48000` default) | mono | PCM16 |
+| `aplay` | TTS output rate | mono | `S16_LE` |
+
+A single differing rate anywhere breaks segmentation and transcription. This is
+one of the documented invariants in
+[../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
-## 4. Tur yaşam döngüsü
+## 4. Turn lifecycle
 
 ```
-[1] turnStartedAt = now          ← tur başlangıcı (STT fiilen başlarken)
-[2] STT                          telemetry.addStageTime('stt', …)
-[3] LLM çağrısı                  telemetry.addStageTime('llm', …)
-[4] tool_calls varsa MCP         telemetry.addStageTime('mcp', …)
-[5] onay gerekiyorsa → bekle
-[6] TTS akışı, ilk PCM yazımı    ← BURADA totalMs kesilir (ilk ses)
-[7] kuyruk boşalana kadar bekle  playbackMs (totalMs'e DAHİL DEĞİL)
-[8] finishTurn() → turn-latency olayı
+[user stops speaking]
+        │
+        ├─ VAD decides "silence ≥ 600 ms"
+        │
+        ▼
+ flushSpeechSegment()
+        │  turnToken = ++counter        ← concurrency guard
+        │  telemetry.turnStart(now)
+        ▼
+ STT ──► postprocess ──► turn detector
+        │                     │
+        │                     └─ if incomplete: reopen buffer, wait
+        ▼
+ LLM request (model name from modelOverride, if any)
+        │
+        ├─ tool calls? ──► MCPClient.callTool() ──► permission gate
+        │                        │
+        │                        └─ write/delete → voice confirmation
+        ▼
+ TTS synthesis (streaming)
+        │  first chunk → speaker
+        ▼
+ totalMs = turnStart → first audio        ← THE metric
+ playbackMs = first audio → queue empty   ← happens AFTER totalMs
 ```
 
-### `totalMs` tanımı
+### `totalMs` definition
 
-**Tur başlangıcı → hoparlörden ilk ses çıktığı an.** Sentezin tamamı değil.
-Kullanıcının beklediği süre bu tanıma karşılık gelir; TTS'in 6–7 saniyelik
-tamamı eklenirse ölçüm anlamsızlaşır.
+`totalMs` is the time from the start of the turn (the moment VAD decided the
+user had finished) to the moment the **first audio** reaches the speaker — not
+to the end of synthesis. That is what the user actually waits for.
 
-### Neden `turnToken` var?
+The individual stage durations (`vadMs`, `sttMs`, `llmMs`, `ttsFirstChunkMs`,
+`playbackMs`, …) each describe the time spent **within** that stage. They
+overlap: `vadMs` belongs to the period *before* the turn start, and `playbackMs`
+runs *after* the first audio. Therefore **the sum of the parts does not have to
+equal `totalMs`** — and the UI does not present it as such.
 
-`speakResponse()` çalma bitene kadar bekler. Bu sırada yeni bir tur
-başlayabilir. Önceki turun `finally` bloğu yeni turun sayaçlarını sıfırlayarak
-`totalMs = 0` üretebiliyordu (canlı ölçümde yakalandı). Her tur kendi kimliğini
-taşır; kapanış yalnızca kimlik hâlâ geçerliyse ölçüm yayınlar.
+### `turnToken` — why it exists
 
-### Barge-in (sesi kesme)
+If a user interrupts and starts a new turn while the previous one is still
+finishing, a late event from the old turn can arrive after the new turn has
+begun. Without a token, that stale event would reset the new turn's counters and
+produce a nonsensical latency reading. Every measurement carries the
+`turnToken` it belongs to; mismatched events are dropped.
 
-Kullanıcı konuşurken asistanın sesini keser:
+### Barge-in
 
-1. `ttsEngine.stop()` + `abortController.abort()`
-2. `telemetry.abortTurn()` — yarım kalan ölçüm **yayınlanmaz**
-3. `llm` / `tts` / `playback` aşamaları **birlikte** `ready`/`idle`'a alınır
-4. 500 ms sonra dinleme durumuna dönülür
+`POST /bargein` (and the UI button) must close **all three**:
 
-> Adım 3 kritiktir: yalnızca `playback` kapatılırsa arayüz `KONUŞUYOR` durumunda
-> takılı kalır ve "Sesi kes" düğmesi görünür kalır (canlı doğrulamada yakalandı).
+1. the LLM stream,
+2. TTS synthesis,
+3. the playback queue.
+
+Stopping only playback leaves the pipeline half-alive: the UI keeps showing
+`SPEAKING` because `isSpeaking` is derived from the `tts` **or** `playback`
+stage being active.
 
 ---
 
-## 5. MCP entegrasyonu
+## 5. MCP integration
 
-### Süreç modeli
+### Process model
 
-Her sunucu `node mcp_servers/<ad>/dist/index.js` olarak başlatılır.
-`stdout` → JSON-RPC çerçeveleri, `stderr` → günlükler.
-
-Bir sunucu çökerse yalnızca o sunucunun araçları kaybolur; boru hattı ayakta
-kalır ve `getMcpServerStatuses()` başarısız sunucuyu `connected: false` bildirir.
-
-### Araç adlandırma
-
-LLM'e araçlar **`sunucu.arac`** biçiminde sunulur (ör. `gmail.send_email`).
-
-Neden: ön ek olmadan model `list_channels` döndürüyor, ajan bunu sunucu adı
-sanıp "MCP sunucusu bulunamadı" hatası veriyordu. Ön ek ayrıca iki sunucudaki
-aynı araç adını çakışmaktan korur.
-
-Model öneki atlarsa `resolveMcpTool()` aracı tüm sunucularda arar. Tam olarak
-tek sunucuda bulunursa o kullanılır; birden çok sunucuda varsa **belirsizlik
-nedeniyle çağrı atlanır** (yanlış sunucuda yan etki üretmektense).
-
-### İzin akışı
+Each server is spawned as a child process and speaks JSON-RPC 2.0 over stdio:
 
 ```
-tool_calls
-   │
-   ▼
-inferPermission(toolName) ──▶ read    → hemen çalışır
-                          ├─▶ write   → requestVoiceConfirmation() → 15 sn bekle
-                          └─▶ delete  → DIJI_ALLOW_DELETE değilse RED
+agent ──spawn──► node mcp_servers/gmail/dist/index.js
+      ──stdin──► {"jsonrpc":"2.0","id":1,"method":"tools/list"}
+      ◄─stdout── {"jsonrpc":"2.0","id":1,"result":{...}}
 ```
 
-Onay isteği **hem** SSE olayı (`mcp-confirmation-required`) **hem** telemetri
-kaydı (`telemetry.setPendingConfirmation`) üretir; arayüz diyaloğu bu kayıtla
-açar ve geri sayımı gösterir.
+`stdout` is protocol-only. All diagnostics go to `stderr` and are re-emitted
+through the structured logger.
 
-**Yarış durumu (düzeltildi):** onay kaydı `expiresAt: null` ile TTS'ten **önce**
-yayınlanır, ama promise seslendirme **bittikten sonra** kurulurdu. Kullanıcı
-"Onayla"ya hemen basarsa istek `applied: false` ile sessizce kayboluyordu.
-Çözüm: `POST /confirm`, bekleyen kayıt duruyorsa en fazla 5 sn bekleyip yeniden
-dener.
+### Tool naming
+
+Tools are exposed to the LLM as `<server>.<tool>`, e.g. `gmail.send_message`.
+`resolveMcpTool()` splits on the first dot to route the call back to the right
+server. Tool definitions are converted from the MCP schema into the
+OpenAI tool-calling schema in `getMCPToolsAsLLMTools()`.
+
+### Permission flow
+
+```
+LLM wants to call a tool
+        │
+        ▼
+PermissionGate.evaluate(request, permission, config)
+        │
+        ├─ read   → allowed immediately
+        │
+        ├─ write  → allowed, requiresConfirmation = true
+        │             token = randomBytes(32), TTL 5 min
+        │
+        └─ delete → blocked unless DIJI_ALLOW_DELETE=true
+                      (calendar delete always requires strict confirmation)
+        │
+        ▼
+Publish pendingConfirmation to telemetry
+        │
+        ├─ SSE `confirmation` event → UI dialog opens
+        └─ the assistant SPEAKS the question
+        │
+        ▼
+User answers → POST /confirm { confirmed }
+        │
+        ▼
+Token validated (single use, TTL checked) → tool invoked or refused
+```
+
+### The `/confirm` race — and its fix
+
+`requestVoiceConfirmation()` publishes the confirmation record **before** TTS
+starts (`expiresAt: null`) but installs the pending promise **after** synthesis
+finishes. Because the UI opens its dialog early, a user who pressed “Confirm”
+immediately had the request silently dropped with `applied: false` — the user
+believed the action was approved while nothing happened.
+
+The fix: `/confirm` retries for up to 5 seconds at 100 ms intervals as long as a
+confirmation record still exists. If there is no pending confirmation at all it
+returns `applied: false` immediately.
 
 ---
 
-## 6. Kontrol sunucusu ve telemetri
+## 6. Control server and telemetry
 
-### Uç noktalar
+| Property | Value |
+|---|---|
+| Host | `127.0.0.1` — a **hardcoded constant** |
+| Port | `8899` (override with `DIJI_CONTROL_PORT`) |
+| Auth | None — local IPC semantics, surface narrowed instead |
+| Body limit | 1 MB |
 
-Tam sözleşme: [`API.md`](API.md)
+`telemetry.ts` is an `EventEmitter` that maintains:
 
-### Telemetri modeli
+- **stage states** — eight fixed stages (`agent`, `mic`, `vad`, `stt`, `llm`,
+  `tts`, `playback`, `mcp`) with `idle | ready | active | warn | error`;
+- **log entries** — a bounded ring buffer shown in the UI panel;
+- **turn latency** — the last `TurnLatency` record;
+- **conversation history** — the *visible* transcript only (last 50 entries);
+- **pending confirmation** — `null` unless the agent is genuinely waiting.
 
-`telemetry.ts` iki şeyi tutar:
+`control-server.ts` subscribes to `event` and forwards every event to all SSE
+clients.
 
-1. **Anlık aşama durumu** — 8 aşama (`agent`, `mic`, `vad`, `stt`, `llm`,
-   `mcp`, `tts`, `playback`), her biri `{status, detail, metrics}`
-2. **Tur ölçümü** — `turnStart()` ile başlar, `finishTurn()` ile `TurnLatency`
-   üretir
+### Why the model catalog is a separate endpoint
 
-`TurnLatency` alanları:
-
-```
-totalMs, vadMs, sttMs, llmMs, llmFirstTokenMs, mcpMs,
-ttsFirstChunkMs, ttsMs, playbackMs, firstAudioMs,
-ttsEnabled, mcpToolCount, mcpServers, sttChars, replyChars,
-llmModel, measuredAt
-```
-
-**Toplam ≠ aşama toplamı.** `vadMs` ve `playbackMs` diğer aşamalarla örtüşür.
-
-### SSE akışı
-
-```
-snapshot            → bağlantı anında tam durum
-stage               → tek aşamanın değişimi
-log                 → zaman damgalı olay kaydı
-turn-latency        → tur bittiğinde tam nesne
-conversation-update → sohbet listesinin tamamı (son 50)
-confirmation        → onay diyaloğu aç/kapat
-barge-in / tts-toggle / model-change
-```
-
-Arayüz bağlantı koptuğunda üstel geri çekilmeyle yeniden bağlanır; `snapshot`
-sayesinde durum asla bayat kalmaz.
+`GET /models` is **not** part of `/state`. Building the catalog requires an HTTP
+request to the local LLM server (~2.5 s timeout), and `/state` is called on
+every UI start. Separating them keeps startup fast and the catalog fetches only
+when the Settings panel opens.
 
 ---
 
-## 7. Arayüz katmanı
+## 7. UI layer
 
-### Süreç izolasyonu
-
-`main.cjs` → `preload.cjs` → renderer. Renderer'ın Node yeteneği yoktur.
-`window.diji` yalnızca şu yüzeyi açar:
+### Isolation
 
 ```ts
-window.diji = {
-  getState, getModels, selectModel,
-  ask, listen, tts, confirm, bargeIn,
-  onTelemetry, onConnection,
+webPreferences: {
+  nodeIntegration: false,
+  contextIsolation: true,
+  preload: path.join(__dirname, 'preload.cjs'),
 }
 ```
 
-Her çağrı `ipcRenderer.invoke` ile main'e, oradan `agent-bridge.cjs` ile HTTP'ye
-gider. Zaman aşımları işleme göre ayarlıdır (model seçimi 120 sn — drifting TTS
-Python köprüsü uzun sürebilir).
+The renderer gets a narrow `window.diji` surface — 10 methods, no raw
+`ipcRenderer`, no filesystem access.
 
-### Varlık yükleme
+### Why the `app://` protocol
 
-SPA derlemesi `dist/client/_shell.html` üretir ve varlık yolları **mutlak**
-(`/assets/...`) olur. `file://` ile yüklenirse JS/CSS hiç gelmez ve arayüz
-görünür ama **tüm düğmeler ölü** kalır.
+The SPA build emits `dist/client/_shell.html` with **absolute** asset paths
+(`/assets/…`). Loading it over `file://` resolves those against the filesystem
+root and the page renders blank. Therefore:
 
-Çözüm: `scripts/prepare-electron.cjs` yolları `./` yapar ve `index.html` yazar;
-`main.cjs` sayfayı `app://jarvis/` özel protokolü üzerinden sunar.
-`resolveRootDocument()` hem `index.html` hem `_shell.html` arar (ileri/geri
-uyumluluk).
+1. `scripts/prepare-electron.cjs` copies `_shell.html` to `index.html` and
+   rewrites `/assets/` → `./assets/`.
+2. Electron registers a privileged `app://` scheme and serves `dist/`.
 
-### `isSpeaking` neden türetiliyor?
+### Why `isSpeaking` is derived
 
-`state.pipeline.state.isSpeaking` yalnızca `snapshot`/`getState` ile gelir;
-`stage` olayları onu güncellemez → bayatlar (TTS bitse bile `true` kalabilir).
-Canlı sinyal `tts` ve `playback` aşamalarıdır (saniyede birkaç kez SSE ile
-tazelenir). `use-agent.ts` bunu `useMemo` ile türetir; bayat bayrak yalnızca
-aşama bilgisi hiç yoksa yedek olur.
+```ts
+const isSpeaking = ttsStageActive || playbackStageActive;
+```
+
+Collapsing this into a single boolean flag leaves the UI stuck on `SPEAKING`
+after a barge-in. Looking at both stages tolerates the race between the two
+being torn down.
+
+### Telemetry event routing
+
+Only the **first** SSE event (`snapshot`) carries an `event:` line. Every
+subsequent event is written as `data:` only and is discriminated by its `type`
+field. The client therefore uses `EventSource.onmessage`, not
+`addEventListener`.
 
 ---
 
-## 8. Model yönetimi
+## 8. Model management
 
-### Katalog (`model-catalog.ts`)
+### Catalog sources
 
-Tek doğruluk kaynağı. Sabit "desteklenen modeller" tablosu **yoktur**.
-
-| Tür | Kaynak | Kural |
+| Kind | Source | Requirement |
 |---|---|---|
-| STT | `~/.diji/models/sherpa-onnx-whisper-<önek>/` | `encoder*` + `decoder*` + `tokens` **üçü** |
-| TTS | `~/.diji/models/vits-*` | `.onnx` + `tokens.txt` |
-| LLM | `http://127.0.0.1:8000/v1/models` | 2,5 sn abort |
+| STT | `~/.diji/models/sherpa-onnx-whisper-<prefix>/` | `<prefix>-encoder*.onnx`, `<prefix>-decoder*.onnx`, `<prefix>-tokens.txt` — all three |
+| TTS | `~/.diji/models/vits-*` | any `.onnx` + `tokens.txt` |
+| LLM | `GET {baseUrl}/models` | 2.5 s abort |
 
-Eksik dosyalı model listede **kalır** ama `available: false` → arayüzde
-`disabled`. Neden: yarım indirilmiş model seçilirse ajan açılışta ölür.
+An incomplete Whisper model still appears in the list but with
+`available: false` and the reason in `detail`. This is deliberate: the user must
+be able to see *why* something cannot be selected.
 
-`current` alanı **çalışan motordan** okunur, yapılandırmadan değil. Neden:
-`config.tts.provider = drifting-tts` derken Python köprüsü ölüp sherpa-vits
-çalışabiliyor; panelde çalışmayan bir sağlayıcıyı "seçili" göstermek yanıltıcı
-olurdu.
+### Switching
 
-### Geçiş
-
-| Tür | Yöntem | Süre |
+| Kind | Mechanism | Cost |
 |---|---|---|
-| llm | ad her istek gövdesinde — motor yeniden başlatılmaz | anında |
-| stt | `STTEngine` dispose + yeniden kur (`modelPriority: [önek]`) | ~2–6 sn |
-| tts | `TTSEngine` dispose + yeniden kur | sherpa ~1–3 sn · drifting ~60–70 sn |
+| `llm` | The name travels in the next request body; no engine restart | Instant |
+| `stt` | `STTEngine` disposed, recreated with `modelPriority: [id, …]` | ~2–6 s |
+| `tts` | `TTSEngine` disposed, recreated | ~1–3 s (`drifting-tts`: ~60–70 s) |
 
-Aynı model yeniden seçilirse **no-op** — motor durdurulmaz. (Canlı ölçümde aynı
-seçim 8 sn boşa bekleme ve gereksiz mikrofon kesintisi üretiyordu.)
+Two guards are essential:
 
-### Kalıcılık (`env-prefs.ts`)
+1. **No-op guard** — re-selecting the same model does not restart the engine.
+   Measured: a needless restart costs 8 s of dead time plus an unnecessary
+   microphone cut.
+2. **`current` comes from the running engine** — `drifting-tts` may fail to start
+   and the engine silently falls back to `sherpa-vits`, so `config.tts.provider`
+   would be misleading.
 
-Seçim `~/.config/diji/env` dosyasına yazılır.
+### Persistence
 
-**Neden `config.json` değil:** yapılandırma `env-bootstrap.ts` ile en erken
-aşamada bu dosyadan okunur ve `@diji/shared` yüklenirken `DEFAULT_AGENT_CONFIG`
-bu değerlerle üretilir. Yazılan anahtar bir sonraki açılışta hiçbir ek kod
-çalışmadan etkili olur. `config.json` yolu `process.cwd()`'ye bağlıdır.
+Selections are written to `~/.config/diji/env` by `env-prefs.ts`:
 
-| Özellik | Davranış |
+| Kind | Keys written |
 |---|---|
-| Yorumlar | Korunur — satır satır işlenir |
-| Atomiklik | Geçici dosya → `rename` |
-| İzin | `0600` (API anahtarı olabilir) |
-| Hata | Fırlatmaz → `{ ok, path, error, changed }` |
+| `llm` | `DIJI_LLM_MODEL` |
+| `stt` | `DIJI_STT_MODEL_PREFIX`, `DIJI_STT_MODEL` |
+| `tts` (voice) | `DIJI_TTS_PROVIDER=sherpa-vits`, `DIJI_TTS_VITS_MODEL` |
+| `tts` (backend) | `DIJI_TTS_PROVIDER` |
 
-Yazma başarısız olursa **model değişikliği geri alınmaz** (bu süreçte
-geçerlidir) ama yanıt `persisted: false` + `persistError` döner; arayüz
-"· yalnızca bu oturum" diye uyarır.
+Write contract: line-by-line (comments preserved), **all** duplicate keys
+updated, atomic (temp + `rename`), mode `0600`, and it **never throws** — it
+returns `{ ok: false, error }` instead.
+
+An invalid selection (`409`) writes nothing, otherwise the agent would break on
+the next start.
 
 ---
 
-## 9. Tasarım kararları
+## 9. Design decisions
 
-| Karar | Gerekçe |
-|---|---|
-| **stdio JSON-RPC** (HTTP değil) | Süreç izolasyonu; sunucu çökse bile asistan ayakta. Kimlik doğrulama/port yönetimi gerekmez |
-| **Mock yok** | Ses bileşeninde sahte yanıt "asistan konuşuyor ama ses yok" arızasını gizler |
-| **`stdout` = protokol** | Tek bir `console.log` MCP çerçevesini bozar |
-| **Aşama başına telemetri** | Hangi adımın yavaş olduğu görünmeli; tek toplam sayı teşhis ettirmez |
-| **`current` = çalışan motor** | Yapılandırma niyettir, gerçek değildir |
-| **`totalMs` = ilk ses** | Kullanıcının beklediği süre budur |
-| **`turnToken`** | Eşzamanlı turlarda ölçüm sıfırlanmasını önler |
-| **Onay 15 sn + zaman aşımında RED** | Güvenli taraf; sessizce izin vermek yerine reddet |
-| **Araç adı `sunucu.arac`** | Çakışma ve yanlış çözümleme riskini kaldırır |
-| **`app://` protokolü** | `file://` mutlak varlık yollarını kırar → ölü düğmeler |
+| Decision | Rationale | Alternative rejected because |
+|---|---|---|
+| Whole-buffer STT | Whisper needs sequence context | 100 ms chunks produce garbage |
+| Silence window 600 ms | Measured trade-off between responsiveness and premature cuts | Lower values cut Turkish sentences mid-word |
+| `totalMs` ends at first audio | That is the perceived wait | Measuring to end of synthesis hides the real UX |
+| Derived `isSpeaking` | Survives partial barge-in teardown | A single boolean sticks on `SPEAKING` |
+| Env file, not `config.json` | Absolute path, read before `@diji/shared` is evaluated | `config.json` resolves against `cwd`, which varies |
+| Catalog from disk | Adding a model = copying files, no code change | A hardcoded supported-model table goes stale |
+| `available: false` rows | Shows *why* something is unusable | Hiding unusable models makes failures mysterious |
+| No auth on the control server | Local IPC semantics; a shared secret in a local file buys nothing | — (host pinned to loopback instead) |
+| Real engines only | “Silent failure” is worse than a loud error | Mocks hid device/format bugs |
 
 ---
 
-## 10. Bilinen sınırlar
+## 10. Known limits
 
-| Sınır | Açıklama |
-|---|---|
-| Tek oturum | Eşzamanlı sesli tur kilidi (`isProcessing`) vardır; ikinci tur atlanır |
-| Linux + ALSA | `arecord`/`aplay` alt süreçleri Linux'a özgüdür |
-| Yerel LLM zorunlu | Diji LLM sunucusunu **başlatmaz**; yalnızca bağlanır |
-| Drifting TTS platformu | Python + torch gerekir; başlatılamazsa sherpa-vits'e düşer |
-| Whisper sabit model | Tanıyıcı modeli yükleme anında sabitler → geçiş motoru yeniden kurar |
-| Reasoning bütçesi | `agent` modeli düşünür; toplam bütçe 2048 token ile sınırlıdır |
-| Uzun konuşma sınırı | Segment ~30 sn'de zorla kapatılır (`MAX_SPEECH_BYTES`) |
-| Arayüz `ui/` | Önceki Next.js arayüzü arşiv durumunda; üretim arayüzü `ui-app/` |
+| Limit | Impact | Mitigation |
+|---|---|---|
+| `drifting-tts` does not start on every machine | Falls back to `sherpa-vits` silently | `current` reports the *running* engine |
+| `totalMs` excludes playback | A long reply has a long audible tail after `totalMs` | `playbackMs` is reported separately |
+| `vadMs` and `playbackMs` are not additive | Stage sums ≠ `totalMs` | The UI shows each stage on its own |
+| Control server unauthenticated | Any local process can drive the agent | Bound to `127.0.0.1`; narrow surface |
+| Conversation limited to 50 entries | Old turns scroll out | Bounded memory is intentional |
+| Single-language STT configuration | The pipeline is tuned for Turkish | Change `DIJI_STT_LANGUAGE` and the dictionary |
+| Model weights not verified | A replaced `.onnx` file loads without a checksum | Keep `~/.diji/models` at `0700` |
+| `ELECTRON_RUN_AS_NODE` in the shell | Electron behaves like Node, no window | Launch with `env -u ELECTRON_RUN_AS_NODE` |
+
+---
+
+## Related documents
+
+- [API.md](API.md) — endpoint contracts and SSE schemas
+- [CONFIGURATION.md](CONFIGURATION.md) — every `DIJI_*` variable
+- [MODELS.md](MODELS.md) — model files, sizes, licences
+- [../SECURITY.md](../SECURITY.md) — threat model and permission gate
+- [../CONTRIBUTING.md](../CONTRIBUTING.md) — build, test, invariants
+
+Turkish originals: [`ARCHITECTURE.tr.md`](ARCHITECTURE.tr.md), [`API.tr.md`](API.tr.md),
+[`CONFIGURATION.tr.md`](CONFIGURATION.tr.md), [`MODELS.tr.md`](MODELS.tr.md),
+[`../SECURITY.tr.md`](../SECURITY.tr.md), [`../CONTRIBUTING.tr.md`](../CONTRIBUTING.tr.md).

@@ -1,508 +1,420 @@
 # Diji Voice Assistant
 
-**Türkçe** · [English](README.en.md)
+[Türkçe](README.tr.md) · **English**
 
-**Tamamen yerel çalışan Türkçe sesli asistan.** Bulut yok, telemetri yok, ses
-cihazdan çıkmıyor. Konuşma tanıma, seslendirme, ses etkinliği algılama ve dil
-modeli çağrılarının tamamı kendi makinenizde çalışır.
+**A fully local Turkish voice assistant.** No cloud, no telemetry, the audio
+never leaves your machine. Speech recognition, speech synthesis, voice activity
+detection and every language-model call run locally.
 
 ```
-Mikrofon → VAD → Whisper (STT) → Tur dedektörü → LLM → MCP araçları → TTS → Hoparlör
+Microphone → VAD → Whisper (STT) → Turn detector → LLM → MCP tools → TTS → Speaker
 ```
 
-![Diji ana ekranı](docs/screenshots/ui-main.png)
+![Diji main window](docs/screenshots/ui-main.png)
 
 <details>
-<summary><b>Ayarlar — model seçimi</b> (görseli aç)</summary>
+<summary><b>Settings — model selection</b> (click to expand)</summary>
 
-![Ayarlar panelinde STT / LLM / TTS seçimi](docs/screenshots/ui-settings-models.png)
+![STT / LLM / TTS selection in the Settings panel](docs/screenshots/ui-settings-models.png)
 
-Listeler **tamamen makinede ne varsa** ondan üretilir. Seçim
-`~/.config/diji/env` dosyasına kalıcı yazılır.
+The lists are generated **entirely from what is present on the machine**.
+Selections are persisted to `~/.config/diji/env`.
 
 </details>
 
 ---
 
-## İçindekiler
+## Table of contents
 
-- [Ne yapar](#ne-yapar)
-- [Mimari](#mimari)
-- [Hızlı başlangıç](#hızlı-başlangıç)
-- [Çalıştırma modları](#çalıştırma-modları)
-- [Masaüstü arayüzü](#masaüstü-arayüzü)
-- [Ajan kontrol API'si](#ajan-kontrol-apisi)
-- [Model yönetimi](#model-yönetimi)
-- [Yapılandırma](#yapılandırma)
-- [İzin kapısı](#i-zin-kapısı)
-- [Gizlilik ve güvenlik](#gizlilik-ve-güvenlik)
-- [Proje yapısı](#proje-yapısı)
-- [Sorun giderme](#sorun-giderme)
-- [Katkı](#katkı)
-- [Lisans](#lisans)
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [Design decisions](#design-decisions)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Running it](#running-it)
+- [Desktop UI](#desktop-ui)
+- [Control API](#control-api)
+- [Model management](#model-management)
+- [Configuration](#configuration)
+- [Permission gate](#permission-gate)
+- [Privacy and security](#privacy-and-security)
+- [Project layout](#project-layout)
+- [Troubleshooting](#troubleshooting)
+- [Commands](#commands)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Ne yapar
+## What it does
 
-| Yetenek | Teknoloji | Durum |
+| Capability | Technology | Status |
 |---|---|---|
-| Konuşma tanıma (STT) | sherpa-onnx + Whisper | ✅ Gerçek, doğrulandı |
-| Ses etkinliği (VAD) | sherpa-onnx + Silero | ✅ Gerçek, doğrulandı |
-| Seslendirme (TTS) | Drifting TTS (Python) + sherpa-onnx VITS/Piper yedek | ✅ Gerçek, doğrulandı |
-| Dil modeli (LLM) | OpenAI uyumlu yerel uç nokta (`127.0.0.1:8000`) | ✅ Gerçek, doğrulandı |
-| Araç kullanımı (MCP) | JSON-RPC 2.0 over stdio, 6 sunucu | ✅ Gerçek, 24 araç |
-| İzin kapısı | 🟢 oku / 🟡 yaz (onay) / 🔴 sil | ✅ Doğrulandı |
-| Masaüstü arayüzü | Electron + TanStack Start (React) | ✅ Derleniyor |
-| Model seçimi | Ayarlar panelinden STT/LLM/TTS, **kalıcı** | ✅ Doğrulandı |
+| Speech recognition (STT) | sherpa-onnx + Whisper | ✅ Real, verified |
+| Voice activity (VAD) | sherpa-onnx + Silero | ✅ Real, verified |
+| Speech synthesis (TTS) | Drifting TTS (Python) + sherpa-onnx VITS/Piper fallback | ✅ Real, verified |
+| Language model (LLM) | OpenAI-compatible local endpoint (`127.0.0.1:8000`) | ✅ Real, verified |
+| Tool use (MCP) | JSON-RPC 2.0 over stdio, 6 servers | ✅ Real, 24 tools |
+| Permission gate | 🟢 read / 🟡 write (confirm) / 🔴 delete | ✅ Verified |
+| Desktop UI | Electron + TanStack Start (React) | ✅ Builds |
+| Model selection | Settings panel for STT/LLM/TTS, **persistent** | ✅ Verified |
 
-**Ses bileşenlerinde hiçbir sahte (mock) yanıt yoktur.** Model dosyaları
-eksikse motor **açık hata** verir — "asistan konuşuyor ama ses yok" gibi sessiz
-arızalara izin verilmez.
-
----
-
-## Mimari
-
-```
-┌──────────────┐   PCM 16 kHz   ┌──────────────────┐
-│  Mikrofon    │───────────────▶│ VAD (Silero)     │──▶ konuşma var mı?
-│  (arecord)   │                └────────┬─────────┘
-└──────────────┘                         ▼
-                              ┌──────────────────────┐
-                              │ STT (Whisper ONNX)   │──▶ "yarın toplantım var mı?"
-                              └──────────┬───────────┘
-                                         ▼
-                              ┌──────────────────────┐
-                              │ Tur dedektörü (TR)   │──▶ cümle bitti mi?
-                              └──────────┬───────────┘
-                                         ▼
-                  ┌──────────────────────────────────────┐
-                  │ LLM  (127.0.0.1:8000, OpenAI uyumlu) │
-                  └──────────┬───────────────────────────┘
-                             │ tool_calls
-                             ▼
-                  ┌──────────────────────┐        ┌─────────────────────┐
-                  │ MCP Client           │◀──────▶│ 6 yerel MCP sunucusu│
-                  │ (JSON-RPC over stdio)│        │ gmail, calendar,    │
-                  └──────────┬───────────┘        │ drive, notion,      │
-                             ▼                    │ slack, chrome       │
-                  ┌──────────────────────┐        └─────────────────────┘
-                  │ TTS (Drifting/VITS)  │
-                  └──────────┬───────────┘
-                             ▼
-                         Hoparlör (aplay)
-```
-
-### Bileşenler
-
-| Paket | Görev |
-|---|---|
-| `agent/` | Ses boru hattı, LLM/MCP/TTS orkestrasyonu, kontrol sunucusu (`:8899`) |
-| `shared/` | Yapılandırma şeması, tipler, günlükleyici, izin kapısı |
-| `mcp_servers/` | 6 bağımsız MCP sunucusu (her biri ayrı alt süreç) |
-| `ui-app/` | Electron + TanStack Start masaüstü arayüzü ("Kuantum Cam") |
-| `ui/` | Önceki Next.js arayüzü (arşiv) |
-| `scripts/` | Model indirme, kurulum, uçtan uca test, CDP doğrulama |
-
-Ayrıntılı mimari: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [English](docs/en/ARCHITECTURE.md)
-
-### Tasarım kararları
-
-- **stdio JSON-RPC.** Her MCP sunucusu ayrı alt süreçtir; biri çökse bile asistan ayakta kalır. **stdout yalnızca protokole aittir** — tüm günlükler `stderr`'e yazılır ([`shared/src/utils/logger.ts`](shared/src/utils/logger.ts)).
-- **Sessiz arıza yok.** Eksik model, erişilemeyen LLM, ölü alt süreç → açık hata veya panelde dürüst durum.
-- **Tek doğruluk kaynağı.** Arayüzdeki "seçili model" her zaman **çalışan motordan** okunur, yapılandırmadan değil.
-- **Ölçülen değer uydurulmaz.** Telemetrideki süreler gerçek zaman damgalarından gelir; ölçülmeyen alan `—` kalır.
+**There are no mock responses in the audio path.** If model files are missing,
+the engine fails **loudly** — silent faults such as "the assistant talks but
+there is no sound" are not tolerated.
 
 ---
 
-## Hızlı başlangıç
+## Architecture
 
-### Ön koşullar
-
-| Gereksinim | Neden |
-|---|---|
-| Node.js ≥ 20, npm 10 | Ajan ve arayüz |
-| `alsa-utils` (`arecord`, `aplay`) | Ses giriş/çıkışı |
-| Python 3 + `drifting-tts` | Birincil TTS (isteğe bağlı — yedek VITS var) |
-| Yerel LLM sunucusu | `http://127.0.0.1:8000/v1` (OpenAI uyumlu) |
-
-```bash
-sudo apt install alsa-utils
+```mermaid
+flowchart TD
+    A[Microphone<br/>arecord] --> B[VAD · Silero]
+    B -->|speech detected| C[STT · Whisper ONNX]
+    C --> D[Turn detector<br/>Turkish]
+    D --> E[LLM<br/>local OpenAI-compatible]
+    E --> F[MCP tools<br/>gmail·calendar·drive·notion·slack·chrome]
+    F --> E
+    E --> G[TTS<br/>drifting-tts / VITS]
+    G --> H[Speaker · aplay]
+    B -.->|silence threshold| D
 ```
 
-### Kurulum
+### Components
+
+| Directory | Responsibility | Language |
+|---|---|---|
+| [`shared/`](shared) | Types, default configuration, permission gate, logger. The foundation everything depends on. | TS |
+| [`agent/`](agent) | Audio pipeline, control server (`127.0.0.1:8899`), telemetry, model catalog. | TS |
+| [`mcp_servers/`](mcp_servers) | Six MCP servers (gmail, calendar, drive, notion, slack, chrome) as stdio subprocesses. | TS |
+| [`ui-app/`](ui-app) | Electron + TanStack Start desktop UI. Independent build. | TS/TSX |
+| [`ui/`](ui) | **Archive** — the previous Next.js UI. New work happens in `ui-app/`. | TS |
+| [`scripts/`](scripts) | Model download, diagnostics, E2E verification. | JS/Py/sh |
+
+### Layer dependency rule
+
+```
+shared  ←  agent  ←  (nothing)
+shared  ←  mcp_servers
+ui-app  →  HTTP/SSE  →  agent     (no code dependency, contract only)
+```
+
+`shared` may not depend on any workspace. `agent` may not depend on
+`mcp_servers` as code (it only spawns them as processes). `ui-app` never imports
+agent code — it only uses the `window.diji` bridge.
+
+---
+
+## Design decisions
+
+| Decision | Rationale |
+|---|---|
+| **16 kHz mono PCM16 everywhere** | STT, VAD and `/inject` all expect the same format. A single differing rate anywhere breaks segmentation and transcription. |
+| **Microphone device pinned to `default`** | Switching to a raw hardware device (`plughw:...`) grabs the device exclusively and cuts the microphone for every other application. |
+| **`totalMs` = turn start → first audio** | What the user actually waits for. `playbackMs` happens *after* it and is deliberately not part of the sum. |
+| **`turnToken` per turn** | A late event from an old turn must not reset the counters of a new one when turns overlap. |
+| **`isSpeaking` is derived** | It is true if the `tts` **or** `playback` stage is active. Collapsing it into one boolean leaves the UI stuck on `SPEAKING` after a barge-in. |
+| **Barge-in closes all three** | `llm` + `tts` + `playback`. Stopping playback alone leaves the pipeline half-alive. |
+| **`current` = the running engine's identity** | If `drifting-tts` fails to start, the engine silently falls back to `sherpa-vits`. Reading `config` instead would be misleading. |
+| **Persistence in `~/.config/diji/env`, not `config.json`** | `config.json` resolves against `process.cwd()`, which differs between terminal, Electron and systemd. The env file is absolute and is read before `@diji/shared` is even evaluated. |
+| **An invalid selection is never written** | `/models/select` returning `409` must leave the env file untouched — otherwise the agent breaks on next start. |
+| **Re-selecting the same model is a no-op** | Measured: a needless engine restart costs 8 s of dead time plus an unnecessary microphone cut. |
+| **No credential in the repo** | `*.env`, `credentials*.json`, `token*.json`, `*.pem`, `*.key`, `oauth-tokens/` are all ignored. Model weights are not shipped either. |
+
+---
+
+## Requirements
+
+| Requirement | Note |
+|---|---|
+| Node.js ≥ 20, npm 10 | The agent is ESM (`"type": "module"`). |
+| `alsa-utils` (`arecord`, `aplay`) | Audio I/O. |
+| `ffmpeg` (optional) | Only for converting test audio to PCM. |
+| `python3` (optional) | Only for the `drifting-tts` backend. |
+| A local OpenAI-compatible LLM server | e.g. llama.cpp, Ollama, vLLM, LM Studio on `127.0.0.1:8000`. |
+| Model files | `~/.diji/models` — see [docs/MODELS.md](docs/MODELS.md). |
+
+Linux is the supported platform. The audio layer shells out to
+`arecord`/`aplay`.
+
+---
+
+## Installation
 
 ```bash
 git clone https://github.com/tekinaltun2025/Diji_Voice_Assistant.git
 cd Diji_Voice_Assistant
 
-npm install                        # bağımlılıklar
-./scripts/download-models.sh all   # STT + VAD + TTS (~2 GB)
-npm run build                      # shared + agent + ui + mcp
+npm install                       # postinstall builds the shared package
+./scripts/download-models.sh all  # VAD + Whisper + VITS (~1.5 GB)
+npm run build
 ```
 
-Modeller `~/.diji/models` altına kurulur.
-
-### LLM sunucusunu doğrula
+Verify the LLM server before starting:
 
 ```bash
-curl -s -H "Authorization: Bearer sk-local" http://127.0.0.1:8000/v1/models
+curl -s http://127.0.0.1:8000/v1/models | head -c 300
 ```
 
-Çıktıda `"id":"agent"` görünmelidir. Diji bu sunucuyu **kendisi başlatmaz**.
-Görünmüyorsa asistan çökmez; yalnızca dil modeli yanıtları devre dışı kalır
-(STT/VAD/TTS çalışmaya devam eder).
-
-### Tek komutla masaüstü uygulaması
-
-```bash
-cd ui-app && ./jarvis-baslat.sh
-```
-
-Betik sırayla: (1) ajanı `127.0.0.1:8899`'da başlatır ve hazır olmasını bekler —
-**zaten çalışıyorsa dokunmaz** (ikinci süreç mikrofon için yarışır); (2) SPA
-derlemesi yoksa üretir; (3) Electron penceresini açar.
-
-| Değişken | Varsayılan | Açıklama |
-|---|---|---|
-| `DIJI_HOME` | depo kökü | Ajan projesinin yolu |
-| `DIJI_CONTROL_PORT` | `8899` | Kontrol sunucusu portu |
-| `DIJI_TTS_ENABLED` | ajan varsayılanı | `0` = sessiz mod |
-| `DIJI_CDP_PORT` | kapalı | Verilirse DevTools uzaktan hata ayıklama |
+If the server is down the agent still starts — the Settings panel simply reports
+the model as unavailable rather than pretending it is selectable.
 
 ---
 
-## Çalıştırma modları
+## Running it
 
-### 1. Sesli mod (asıl kullanım)
+### 1. Voice mode (the main use case)
 
 ```bash
 npm start
-# eşdeğeri: node agent/dist/index.js
+# equivalent to: node agent/dist/index.js
 ```
 
-Beklenen çıktı:
-
-```
-Mikrofon hazir {"device":"default"}
-Sesli mod hazir — konusabilirsiniz (cikmak icin Ctrl+C)
-```
-
-Konuşun; sessizlik 600 ms'yi geçince segment Whisper'a gönderilir, yanıt TTS ile
-hoparlörden okunur. Çıkış: `Ctrl+C`.
-
-Cihaz seçimi (`arecord -l` / `aplay -l` ile listelenir):
-
-```bash
-DIJI_AUDIO_INPUT_DEVICE=plughw:2,1 \
-DIJI_AUDIO_OUTPUT_DEVICE=plughw:0,0 \
-npm start
-```
-
-### 2. Metin modu (mikrofonsuz)
+### 2. Text mode (no microphone)
 
 ```bash
 npm run start:text
+# equivalent to: DIJI_MODE=text node agent/dist/index.js
 ```
 
-STT ve TTS atlanır; LLM + MCP + tur dedektörü zinciri çalışır. Komutlar:
-`/help`, `/stats`, `/quit`.
-
-### 3. Masaüstü arayüzü
+### 3. Desktop UI
 
 ```bash
-npm run dev:ui          # geliştirme (Vite dev sunucusu + Electron)
-cd ui-app && ./jarvis-baslat.sh   # tek komut, üretim derlemesiyle
+cd ui-app
+npm install
+env -u ELECTRON_RUN_AS_NODE npm run electron:build
 ```
 
-### 4. Hepsi birlikte
+> **Note** — if `ELECTRON_RUN_AS_NODE=1` is set in your shell (it is in some
+> setups), Electron behaves like plain Node and no window appears. Always launch
+> with `env -u ELECTRON_RUN_AS_NODE`.
+
+### 4. Everything together
 
 ```bash
-npm run dev    # agent + ui, tek terminalde
-```
-
-MCP sunucularını ayrıca başlatmanız gerekmez — ajan onları kendi alt süreçleri
-olarak doğurur.
-
----
-
-## Masaüstü arayüzü
-
-Arayüz **"Kuantum Cam"** tasarımını kullanır: mikrofon sesine tepki veren
-akışkan dalga, servis kartları, hat telemetrisi ve sohbet paneli.
-
-### Ekran bölümleri
-
-| Bölüm | İçerik |
-|---|---|
-| Sol kenar | Güç · Geçmiş · Yeni sohbet · **Ayarlar**; altında 7 servis kartı (gerçek MCP durumu) |
-| Orta üst | Durum göstergesi (`HAZIR` / `DİNLİYOR` / `KONUŞUYOR`) + dalga görselleştirmesi |
-| Orta alt | Sohbet paneli + metin girişi |
-| Sağ kenar | Hat telemetrisi: toplam cevap süresi, 8 aşama kutusu, olay akışı, onay diyaloğu |
-
-### Ayarlar → model seçimi
-
-Ayarlar panelinde üç açılır liste vardır: **SES TANIMA (STT)**, **DİL MODELİ
-(LLM)**, **SESLENDİRME (TTS)**.
-
-- Listeler **tamamen makinede ne varsa** ondan üretilir — sabit bir "desteklenen
-  modeller" tablosu yoktur. `~/.diji/models` altına yeni bir Whisper/VITS dizini
-  atmak yeterlidir.
-- Eksik dosyalı modeller listede kalır ama `disabled` olur (seçilirse ajan
-  açılışta ölürdü).
-- Seçim **`~/.config/diji/env`** dosyasına yazılır → uygulama yeniden başlasa da
-  geçerlidir. Yazma başarısız olursa model yine değişir ama arayüz
-  "· yalnızca bu oturum" diye uyarır.
-
-| Tür | Geçiş maliyeti |
-|---|---|
-| **LLM** | Anında — model adı her istek gövdesinde gider, motor yeniden başlatılmaz |
-| **STT** | ~2–6 sn — Whisper modeli yükleme anında sabitlenir, motor yeniden kurulur |
-| **TTS** | sherpa ~1–3 sn · drifting ~60–70 sn (Python köprüsü yeniden kurulur) |
-
-Aynı modeli yeniden seçmek motoru **durdurmaz** (no-op).
-
-### Teşhis paneli
-
-Her aşama kendi kutusunda hem durumu hem **yalnızca o aşamaya ait** süreyi
-gösterir:
-
-| Kutu | Süre kaynağı |
-|---|---|
-| AJAN | tur bazlı değil — toplam süre, sesli mod durumu |
-| MİKROFON | cihaz adı, giriş seviyesi |
-| VAD | `vadMs` |
-| STT | `sttMs` + karakter sayısı |
-| LLM | `llmMs` + ilk token |
-| MCP | `mcpMs` + çağrılan araçlar |
-| TTS | `ttsMs` + ilk parça gecikmesi |
-| OYNATMA | `playbackMs` |
-
-> **Toplam ≠ aşama toplamı.** `vadMs` ve `playbackMs` diğer aşamalarla örtüşür;
-> `totalMs` yalnızca **ilk sese** kadardır.
-
----
-
-## Ajan kontrol API'si
-
-Arayüz ajanı `127.0.0.1:8899` üzerinden yönetir (**yalnızca yerel**).
-
-| Uç nokta | Açıklama |
-|---|---|
-| `GET /health` | `{ok, pid, uptime}` |
-| `GET /state` | Boru hattı durumu + tüm aşamalar + olay geçmişi + `lastTurnLatency` + `conversation` |
-| `GET /events` | SSE: `snapshot`, sonra `stage` / `log` / `turn-latency` / `conversation-update` |
-| `POST /listen {enabled}` | Mikrofonu aç/kapat |
-| `POST /ask {text}` | Metin turu (STT atlanır; `202` döner, yanıt SSE'den gelir) |
-| `POST /inject` | 16 kHz mono PCM'i mikrofon gibi besle (hat testi) |
-| `POST /confirm {confirmed}` | Bekleyen MCP işlemini onayla/reddet |
-| `POST /bargein` | Çalan sesi kes |
-| `GET /models` | Model kataloğu (Ayarlar listeleri) |
-| `POST /models/select {kind,id}` | Model değiştir + kalıcı kaydet |
-
-Tam sözleşme: [`docs/API.md`](docs/API.md) · [English](docs/en/API.md)
-
-### Hat testleri
-
-```bash
-node scripts/control-e2e.js "Merhaba, kendini kisaca tanit"   # metin turu
-node scripts/inject-e2e.js /tmp/konusma.pcm                    # VAD+STT+LLM+TTS
-node scripts/cdp-eval.js "document.title"                      # arayüzü CDP ile oku
+npm run dev    # agent + UI in watch mode
 ```
 
 ---
 
-## Model yönetimi
+## Desktop UI
 
-```bash
-./scripts/download-models.sh all       # hepsi
-./scripts/download-models.sh vad       # Silero VAD       (~600 KB)
-./scripts/download-models.sh tts       # Türkçe VITS       (~60 MB)
-./scripts/download-models.sh whisper   # Whisper small     (~500 MB)
-```
+![Diji main window](docs/screenshots/ui-main.png)
 
-Farklı konum: `export DIJI_MODELS_DIR=/yol/modeller`
+| Region | Contents |
+|---|---|
+| **Sidebar** | Navigation: Chat, History, Settings. History and Settings are mutually exclusive. |
+| **Controls** | Microphone on/off, TTS on/off, barge-in (interrupt) |
+| **Stage** | Audio visualisation plus the current stage readout |
+| **Chat** | Conversation transcript and text input |
+| **Telemetry** | Eight stages (AGENT, MIC, VAD, STT, LLM, TTS, PLAYBACK, MCP) and a live log |
+| **Confirmation dialog** | Visual confirmation, shown alongside the spoken question, for MCP `write`/`delete` |
 
-Ayrıntılar (model boyutları, nicemleme, TTS arka uçları): [`docs/MODELS.md`](docs/MODELS.md) · [English](docs/en/MODELS.md)
+The renderer runs with `contextIsolation: true`, `nodeIntegration: false` and a
+narrow `window.diji` preload surface. It never opens the microphone itself — the
+agent is the sole owner of the audio pipeline.
 
 ---
 
-## Yapılandırma
+## Control API
 
-Tüm ayarlar ortam değişkenleriyle geçersiz kılınabilir. Kalıcı ayarlar
-`~/.config/diji/env` dosyasında tutulur (`ANAHTAR=değer` satırları).
+The agent exposes a small HTTP + SSE server on `127.0.0.1:8899`. The host is a
+**constant**; it cannot be bound to `0.0.0.0`.
 
-### Sık kullanılanlar
-
-| Değişken | Varsayılan | Açıklama |
+| Method | Path | Purpose |
 |---|---|---|
-| `DIJI_LLM_BASE_URL` | `http://127.0.0.1:8000/v1` | OpenAI uyumlu uç nokta |
-| `DIJI_LLM_MODEL` | `agent` | Model adı |
-| `DIJI_LLM_API_KEY` | `sk-local` | `Bearer` kimlik doğrulaması |
-| `DIJI_LLM_TIMEOUT_MS` | `120000` | İstek zaman aşımı (ms) |
-| `DIJI_LLM_REASONING_RESERVE` | `1024` | Reasoning rezervi; düşünmeyen modeller için `0` |
-| `DIJI_STT_MODEL` | `whisper-small` | Whisper model boyutu |
-| `DIJI_STT_MODEL_PREFIX` | *(yok)* | Tek modeli öne alır (Ayarlar buraya yazar) |
-| `DIJI_STT_LANGUAGE` | `tr` | Tanıma dili |
-| `DIJI_TTS_PROVIDER` | `drifting-tts` | `drifting-tts` veya `sherpa-vits` |
-| `DIJI_TTS_VITS_MODEL` | `vits-piper-tr_TR-fettah-medium` | sherpa-vits model dizini |
-| `DIJI_TTS_VOICE` | `studio` | Drifting TTS sesi |
-| `DIJI_TTS_SPEED` | `1.0` | Konuşma hızı |
-| `DIJI_TTS_ENABLED` | `1` | `0` = sessiz mod (yalnızca metin) |
-| `DIJI_VAD_THRESHOLD` | `0.5` | Konuşma eşiği (0–1) |
-| `DIJI_VAD_MIN_SILENCE` | `0.6` | Tur sonu sessizliği (**saniye**) |
-| `DIJI_MCP_ENABLED` | `true` | Araçları kapat/aç |
-| `DIJI_ALLOW_DELETE` | `false` | 🔴 silme iznini aç |
-| `LOG_LEVEL` | `info` | `error`/`warn`/`info`/`debug` |
-| `DIJI_MODE` | `microphone` | `microphone` veya `text` |
-| `DIJI_AUDIO_INPUT_DEVICE` | `default` | ALSA kayıt cihazı |
-| `DIJI_AUDIO_OUTPUT_DEVICE` | `default` | ALSA çalma cihazı |
+| `GET` | `/health` | Liveness (`{ ok, pid, uptime }`) |
+| `GET` | `/state` | Full snapshot of pipeline, audio, telemetry, conversation |
+| `GET` | `/events` | Live SSE stream (`snapshot`, `stage`, `log`, `turn-latency`, `conversation-update`, `confirmation`, `tts-toggle`) |
+| `POST` | `/listen` | Enable/disable the microphone |
+| `POST` | `/ask` | Text turn, returns `202`; the answer arrives over SSE |
+| `POST` | `/inject` | Feed raw PCM16/16 kHz as if it came from the microphone (diagnostics) |
+| `POST` | `/tts` | Toggle speech output (`null` → fall back to env) |
+| `POST` | `/confirm` | Answer a pending MCP confirmation |
+| `POST` | `/bargein` | Interrupt the current turn |
+| `GET` | `/models` | Model catalog for the Settings panel |
+| `POST` | `/models/select` | Switch model, persist to `~/.config/diji/env` |
 
-> **Süre birimleri saniyedir.** `minSilenceDuration: 0.6` = 600 ms.
+Full contracts, field semantics, SSE schemas and error codes:
+**[docs/API.md](docs/API.md)** ([Türkçe](docs/API.tr.md)).
 
-Tam liste: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) · [English](docs/en/CONFIGURATION.md)
+```bash
+curl -s http://127.0.0.1:8899/health
+curl -s http://127.0.0.1:8899/state | jq '.stages[] | {key, status, detail}'
+curl -N http://127.0.0.1:8899/events | head -200
+```
 
 ---
 
-## İzin kapısı
+## Model management
 
-| Seviye | Davranış |
+Model files live in `~/.diji/models` (override with `DIJI_MODELS_DIR`). They are
+**not** committed — `.gitignore` excludes `*.onnx`, `*.gguf`, `*.pt`, `*.bin`,
+`*.safetensors`.
+
+```bash
+./scripts/download-models.sh all
+./scripts/download-models.sh stt-small   # Whisper small only
+./scripts/download-models.sh tts
+./scripts/download-models.sh vad
+```
+
+The catalog is built purely from disk:
+
+| Kind | Source | Requirement |
+|---|---|---|
+| STT | `~/.diji/models/sherpa-onnx-whisper-<prefix>/` | `<prefix>-encoder*.onnx`, `<prefix>-decoder*.onnx`, `<prefix>-tokens.txt` — **all three** |
+| TTS | `~/.diji/models/vits-*` | any `.onnx` + `tokens.txt` |
+| LLM | `http://127.0.0.1:8000/v1/models` | 2.5 s timeout; empty list if the server is down |
+
+A model whose files are incomplete still appears in the list, but greyed out
+(`available: false`) with the reason in `detail` — the user should be able to see
+*why* something cannot be selected.
+
+Switching costs differ deliberately:
+
+| Kind | What happens | Time |
+|---|---|---|
+| `llm` | Only the name sent in the next request changes | Instant |
+| `stt` | `STTEngine` disposed and recreated | ~2–6 s |
+| `tts` (VITS) | `TTSEngine` disposed and recreated | ~1–3 s |
+| `tts` (`drifting-tts`) | Python bridge restarts | ~60–70 s → `slow: true` |
+
+Details, measured sizes and third-party licenses:
+**[docs/MODELS.md](docs/MODELS.md)** ([Türkçe](docs/MODELS.tr.md)).
+
+---
+
+## Configuration
+
+Resolution order (highest wins):
+
+```
+1. Process environment      (export, systemd, Electron spawn env)
+2. ~/.config/diji/env       (persistent user setting — applied only if unset)
+3. Built-in defaults        (shared/src/config/default.ts)
+```
+
+`~/.config/diji/env` is a plain `KEY=value` file — not a shell script. `#`
+comments are preserved, writes are atomic (temp + `rename`), the file mode is
+`0600`, and the writer **never throws**.
+
+Full variable reference: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**
+([Türkçe](docs/CONFIGURATION.tr.md)). A commented template lives at
+[`.env.example`](.env.example).
+
+---
+
+## Permission gate
+
+| Class | Behaviour |
 |---|---|
-| 🟢 `read` | Hemen çalışır (arama, listeleme, okuma) |
-| 🟡 `write` | Kullanıcıya **sesli** sorulur; onay yoksa çalışmaz |
-| 🔴 `delete` | Varsayılan olarak **kapalı**. `DIJI_ALLOW_DELETE=true` gerekir |
+| `read` | Executed immediately (search, list, read) |
+| `write` | Requires **voice confirmation** with a one-time token (5 min TTL) |
+| `delete` | **Blocked** by default. With `DIJI_ALLOW_DELETE=true` it still requires confirmation on every call. |
 
-Sesli onay 15 saniye bekler; zaman aşımında işlem **reddedilir** (güvenli taraf).
-Arayüzde diyalog açılır, kalan süre sayılır.
-
----
-
-## Gizlilik ve güvenlik
-
-- **Ses cihazdan çıkmaz.** STT, TTS ve VAD yerel modellerle çalışır.
-- **Kayıt tutulmaz.** Mikrofon akışı yalnızca işlenir; diske yazılmaz.
-- **Sırlar depoda değil.** API anahtarları `~/.config/diji/env` (izin `0600`)
-  altında tutulur; depoda yalnızca [`.env.example`](.env.example) vardır.
-- **Kontrol sunucusu yalnızca yerel arayüze bağlanır** (`127.0.0.1`).
-- **Yıkıcı işlemler onay ister** ve varsayılan olarak kapalıdır.
-
-Güvenlik modeli ve tehdit değerlendirmesi: [`SECURITY.md`](SECURITY.md) · [English](SECURITY.en.md)
+The gate protects **you from the LLM**, not the LLM from you: a model that
+misreads your intent can initiate a `write`, so read the confirmation dialog
+instead of clicking through it.
 
 ---
 
-## Proje yapısı
+## Privacy and security
+
+| Question | Answer |
+|---|---|
+| Is audio uploaded? | **No.** Processed in memory only, never written to disk. |
+| Is the transcript stored? | **No.** Kept in memory (last 50 messages) and shown in the UI. |
+| Does the control server listen on the network? | **No.** `127.0.0.1` is a hardcoded constant. |
+| Are credentials in the repo? | **No.** Verified by a secret scan; `*.env`, `*.pem`, `credentials*.json` are ignored. |
+| Are model weights in the repo? | **No.** Downloaded separately under their own licenses. |
+
+Threat model, known limitations and a hardening checklist:
+**[SECURITY.md](SECURITY.md)** ([Türkçe](SECURITY.tr.md)).
+
+---
+
+## Project layout
 
 ```
 Diji_Voice_Assistant/
-├── agent/                 # Ses boru hattı + kontrol sunucusu
-│   └── src/
-│       ├── pipeline.ts        # Tur orkestrasyonu
-│       ├── stt.ts tts.ts vad.ts
-│       ├── llm.ts mcp-client.ts
-│       ├── control-server.ts  # HTTP + SSE (:8899)
-│       ├── model-catalog.ts   # Ayarlar listeleri (diskten okur)
-│       ├── env-prefs.ts       # Kalıcı ayar yazımı
-│       ├── telemetry.ts       # Aşama ölçümü
-│       └── turn-detector.ts   # Türkçe tur sonu
-├── shared/                # Tip + şema + günlükleyici + izin kapısı
-├── mcp_servers/           # 6 bağımsız MCP sunucusu
-├── ui-app/                # Electron + TanStack Start arayüzü
-│   ├── electron/              # main / preload / agent-bridge
-│   └── src/
-│       ├── routes/index.tsx   # Kuantum Cam ekranı
-│       ├── hooks/use-agent.ts # window.diji köprüsü
-│       └── components/
-├── scripts/               # Kurulum, model indirme, E2E, CDP
-├── docs/                  # Mimari, kurulum, API, modeller
-└── memory-bank/           # Proje bağlamı ve ilerleme kaydı
+├── agent/                 # Audio pipeline, control server, telemetry
+│   ├── src/pipeline.ts    # Turn lifecycle, model switching, persistence
+│   ├── src/model-catalog.ts
+│   ├── src/env-bootstrap.ts
+│   ├── src/env-prefs.ts
+│   └── src/control-server.ts
+├── shared/                # Types, defaults, permission gate
+├── mcp_servers/           # gmail · calendar · drive · notion · slack · chrome
+├── ui-app/                # Electron + TanStack Start desktop UI
+├── ui/                    # Archived Next.js UI
+├── scripts/               # download-models, smoke-test, cdp-eval, cdp-screenshot
+├── docs/                  # English docs; Turkish siblings are *.tr.md
+│   ├── ARCHITECTURE.md
+│   ├── API.md
+│   ├── CONFIGURATION.md
+│   ├── MODELS.md
+│   └── screenshots/
+├── README.md              # English (this file)
+├── README.tr.md           # Turkish
+├── SECURITY.md            # English
+├── SECURITY.tr.md         # Turkish
+├── CONTRIBUTING.md        # English
+├── CONTRIBUTING.tr.md     # Turkish
+└── LICENSE
 ```
 
 ---
 
-## Sorun giderme
+## Troubleshooting
 
-**`LLM sunucusuna ulaşılamadı`**
-→ `curl -H "Authorization: Bearer sk-local" http://127.0.0.1:8000/v1/models`
-çalışıyor mu? `agent` modeli listede mi?
-
-**`LLM sunucusu 401 döndürdü`**
-→ `DIJI_LLM_API_KEY` (varsayılan `sk-local`) doğru mu?
-
-> LLM erişilemezse asistan çökmez: STT/VAD/TTS çalışmaya devam eder.
-
-**`Mikrofon baslatilamadi` / `arecord bulunamadi`**
-→ `sudo apt install alsa-utils`. Cihazları `arecord -l` ile listeleyin.
-Hiç mikrofon yoksa `npm run start:text`.
-
-**Sesli modda transkript boş**
-→ Kayıt seviyesini ölçün:
-```bash
-timeout 5 arecord -q -t raw -f S16_LE -c 1 -r 16000 -D default /tmp/t.raw
-python3 -c "import struct,math;d=open('/tmp/t.raw','rb').read();n=len(d)//2;\
-s=struct.unpack('<%dh'%n,d[:n*2]);print('rms=',math.sqrt(sum(x*x for x in s)/n))"
-```
-RMS `~100`'ün altındaysa yanlış cihaz veya mute. Geçici çözüm:
-`DIJI_AUDIO_SILENCE_THRESHOLD=0.001`.
-
-**Asistan yanıt veriyor ama ses çıkmıyor**
-→ `aplay -l` ile çıkışı doğrulayın, `DIJI_AUDIO_OUTPUT_DEVICE=plughw:0,0` verin.
-
-**`STT baslatilamadi: Whisper model dosyalari bulunamadi`**
-→ `./scripts/download-models.sh whisper`
-
-**`TTS baslatilamadi: VITS model dosyalari bulunamadi`**
-→ `./scripts/download-models.sh tts`
-
-**`MCP sunucusu atlandi: derlenmis giris noktasi bulunamadi`**
-→ `npm run build:mcp`
-
-**TTS segfault / `phoneme_codepoints is empty`**
-→ `sherpa-onnx-node` 2.x'te Piper'ın espeak-ng fonemleştirmesi kaldırıldı.
-`1.13.8`'e sabitlenmiştir; düşürmeyin.
-
-**Electron `ERR_FILE_NOT_FOUND`**
-→ SPA derlemesi `dist/client/_shell.html` üretir. `scripts/prepare-electron.cjs`
-çalıştırılmalı (`jarvis-baslat.sh` bunu kendisi yapar).
+| Symptom | Cause | Fix |
+|---|---|---|
+| "The assistant talks but I hear nothing" | Wrong output device or TTS engine failed to start | `aplay -l`; check `curl -s 127.0.0.1:8899/state \| jq .stages` |
+| "It does not hear me" | Wrong input device — the most common cause | `arecord -l`; `DIJI_AUDIO_INPUT_DEVICE`; check `audio.acRms` in `/state` |
+| Whisper hallucinates in silence | Whisper invents text in silent regions | Keep `DIJI_STT_TRIM_THRESHOLD` at its default; the preprocessor trims silence |
+| Empty LLM replies | Reasoning budget too small for a reasoning model | Raise `DIJI_LLM_REASONING_RESERVE` (default `1024`); `0` for non-reasoning models |
+| Model greyed out in Settings | Missing model files | Read the `detail` field; run `download-models.sh` |
+| Selection lost after restart | Env file not written | Check `persistError` in the notice; `stat -c '%a' ~/.config/diji/env` → `600` |
+| Electron opens no window | `ELECTRON_RUN_AS_NODE=1` in the shell | `env -u ELECTRON_RUN_AS_NODE` |
+| `tsc` reports hundreds of errors | `shared` built after `agent` | Always use `npx tsc -b`, which honours project reference order |
 
 ---
 
-## Komutlar
+## Commands
 
-```bash
-npm run build              # her şeyi derle
-npm run build:shared       # paylaşılan tipler
-npm run build:agent        # ajan
-npm run build:ui           # arayüz (Next.js, arşiv)
-npm run build:mcp          # 6 MCP sunucusu
-
-npm start                  # ajanı sesli modda çalıştır
-npm run start:text         # metin modu
-npm run dev                # agent + ui birlikte
-npm run lint               # ESLint
-npm run typecheck          # tüm paketler
-
-npm run verify:llm         # LLM uç noktasını canlı doğrula
-npm run test:agent         # birim testleri
-npm run smoke:fast         # duman testi (ses motorlarını atla)
-```
+| Command | Purpose |
+|---|---|
+| `npm start` | Start the agent (voice mode) |
+| `npm run start:text` | Text mode, no microphone |
+| `npm run dev` | Agent + UI in watch mode |
+| `npm run build` | Build all workspaces |
+| `npx tsc -b` | Type-check via project references |
+| `npm run test:agent` | Unit tests (Jest) |
+| `node scripts/smoke-test.js` | End-to-end smoke test |
+| `node scripts/smoke-test.js --skip-audio` | Smoke test without an audio device |
+| `node scripts/control-e2e.js` | Exercise every control endpoint |
+| `node scripts/inject-e2e.js file.pcm` | Inject PCM as if from the microphone |
+| `CDP_PORT=9333 node scripts/cdp-eval.js "<js>"` | Query the running UI over CDP |
+| `CDP_PORT=9333 node scripts/cdp-screenshot.js out.png` | Capture a screenshot of the running UI |
+| `./scripts/download-models.sh all` | Download VAD + STT + TTS models |
 
 ---
 
-## Katkı
+## Contributing
 
-Katkılar memnuniyetle karşılanır. Başlamadan önce
-[`CONTRIBUTING.md`](CONTRIBUTING.md) dosyasını okuyun ([English](CONTRIBUTING.en.md)).
-
-Kısa özet: TypeScript proje referansları (`tsc -b`) kullanılır, her paket
-`composite: true` olmalıdır; `console.log` **kullanılmaz** (stdout MCP
-protokolüne aittir, `stderr` günlükleyicisi kullanılır); ses bileşenlerinde mock
-kabul edilmez.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** ([Türkçe](CONTRIBUTING.tr.md)) for
+build order, testing
+layers, coding rules and the non-negotiable invariants. Note that `console.*` is
+forbidden inside `agent/`, `shared/` and `mcp_servers/` — use the structured
+logger instead.
 
 ---
 
-## Lisans
+## License
 
-[MIT](LICENSE) © 2026 Tekin Altun
+[MIT](LICENSE) © 2026 Tekin Altun.
 
-Üçüncü taraf bileşenler ve model lisansları: [`docs/MODELS.md`](docs/MODELS.md) · [English](docs/en/MODELS.md#licences)
+Model weights, datasets and third-party runtimes are **not** covered by this
+license and are not in this repository — see
+[docs/MODELS.md](docs/MODELS.md#licences) for their respective terms.

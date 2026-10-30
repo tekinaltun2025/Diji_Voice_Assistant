@@ -19,7 +19,7 @@ the Ubuntu desktop. This package contains the clean source code of the project
 - **There is no real AI connection in the standalone design package:** it is a
   UI/design deliverable; sending a message only stores it locally and no
   AI response is produced. The full application wires this to the agent — see
-  [`README.en.md`](README.en.md).
+  [`README.md`](README.md).
 - **The microphone** is used only to animate the audio form; audio is not
   recorded, not sent to a server, and no speech recognition runs.
 

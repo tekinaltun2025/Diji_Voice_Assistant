@@ -1,135 +1,136 @@
-# Diji Voice Assistant — Masaüstü Arayüzü
+# Diji Voice Assistant — Desktop UI
 
-**Türkçe** · [🇬🇧 English](README.en.md)
+**English** · [Türkçe](README.tr.md)
 
-Diji ajanının Electron + TanStack Start arayüzü. **Bağımsız bir alt projedir**:
-kendi `package.json`'ı, kendi bağımlılıkları ve kendi derleme hattı vardır.
-Kök npm workspace'e dahil **değildir**.
+The Electron + TanStack Start interface for the Diji agent. It is an
+**independent sub-project**: it has its own `package.json`, its own dependencies
+and its own build pipeline. It is **not** part of the root npm workspace.
 
-Ajanla **kod bağımlılığı yoktur** — yalnızca HTTP/SSE üzerinden konuşur
-(`127.0.0.1:8899`). Bu yüzden `npm install` iki tarafta ayrı yapılır.
-
----
-
-## İçindekiler
-
-- [Hızlı başlangıç](#hızlı-başlangıç)
-- [Mimari](#mimari)
-- [Klasör yapısı](#klasör-yapısı)
-- [Ajanla iletişim](#ajanla-iletişim)
-- [Ekran bölümleri](#ekran-bölümleri)
-- [Ayarlar — model seçimi](#ayarlar--model-seçimi)
-- [Derleme ve paketleme](#derleme-ve-paketleme)
-- [Sorun giderme](#sorun-giderme)
+There is **no code dependency** on the agent — it only talks over HTTP/SSE
+(`127.0.0.1:8899`). That is why `npm install` is run separately on each side.
 
 ---
 
-## Hızlı başlangıç
+## Table of contents
 
-Ön koşul: ajan derlenmiş ve çalışıyor olmalı (`../agent/dist/index.js`).
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [Folder structure](#folder-structure)
+- [Talking to the agent](#talking-to-the-agent)
+- [Screen sections](#screen-sections)
+- [Settings — model selection](#settings--model-selection)
+- [Building and packaging](#building-and-packaging)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick start
+
+Prerequisite: the agent must be built and running (`../agent/dist/index.js`).
 
 ```bash
-# 1. Bağımlılıklar
+# 1. Dependencies
 cd ui-app
 npm install
 
-# 2. Geliştirme (tarayıcıda, sıcak yeniden yükleme)
+# 2. Development (in the browser, hot reload)
 npm run dev                     # http://localhost:3000
 
-# 3. Electron ile geliştirme
+# 3. Development with Electron
 NODE_ENV=development npm run electron:dev
 
-# 4. Üretim derlemesi + Electron
+# 4. Production build + Electron
 npm run build                   # → dist/
 npm run electron:build          # → dist/ + electron/main.cjs
 ```
 
-Ajan ayrı terminalde:
+The agent, in a separate terminal:
 
 ```bash
 cd ..
-npm start                       # veya: node agent/dist/index.js
+npm start                       # or: node agent/dist/index.js
 curl -s http://127.0.0.1:8899/health   # {"ok":true,...}
 ```
 
 > [!IMPORTANT]
-> Kabuğunuzda `ELECTRON_RUN_AS_NODE=1` tanımlıysa Electron pencere açmaz,
-> Node gibi davranır. Şununla başlatın:
+> If `ELECTRON_RUN_AS_NODE=1` is defined in your shell, Electron will not open a
+> window and behaves like Node. Launch with:
 > ```bash
 > env -u ELECTRON_RUN_AS_NODE npm run electron
 > ```
 
 ---
 
-## Mimari
+## Architecture
 
 ```
-┌───────────────────────────── Electron ana süreç (CJS) ─────────────────────────────┐
+┌───────────────────────────── Electron main process (CJS) ──────────────────────────┐
 │                                                                                    │
 │  electron/main.cjs                                                                 │
 │    • BrowserWindow (contextIsolation:true, nodeIntegration:false, preload)          │
-│    • Sistem tepsisi, global kısayol (Alt+Space), pencere konumu                    │
-│    • Ajanı spawn eder: `node agent/dist/index.js` (10-20 sn yüklenme)              │
-│    • app:// özel protokolü → dist/ varlıkları sunulur                              │
+│    • System tray, global shortcut (Alt+Space), window position                     │
+│    • Spawns the agent: `node agent/dist/index.js` (10–20 s to load)                │
+│    • app:// custom protocol → serves the dist/ assets                               │
 │                                                                                    │
-│  electron/preload.cjs  ──contextBridge──▶  window.diji (dar yüzey, 10 metod)        │
-│  electron/agent-bridge.cjs                                                                 │
-│    • HTTP istemcisi  (GET/POST, 127.0.0.1:8899)                                    │
-│    • SSE istemcisi   (/events → olayları renderer'a iter)                          │
-│    • Sağlık yoklaması + otomatik yeniden bağlanma                                  │
+│  electron/preload.cjs  ──contextBridge──▶  window.diji (narrow surface, 10 methods) │
+│  electron/agent-bridge.cjs                                                         │
+│    • HTTP client  (GET/POST, 127.0.0.1:8899)                                       │
+│    • SSE client   (/events → pushes events to the renderer)                        │
+│    • Health probe + automatic reconnect                                            │
 └────────────────────────────────────┬───────────────────────────────────────────────┘
-                                     │ IPC (kanal başına tek yön)
+                                     │ IPC (one direction per channel)
 ┌────────────────────────────────────▼───────────────────────────────────────────────┐
 │  Renderer (React 19 + TanStack Router)                                             │
-│    • use-agent.ts  → tüm ajan durumu tek hook'ta                                   │
-│    • routes/index.tsx → Quantum Console arayüzü                                    │
+│    • use-agent.ts  → all agent state in a single hook                               │
+│    • routes/index.tsx → Quantum Console interface                                   │
 └────────────────────────────────────────────────────────────────────────────────────┘
                                      │ HTTP + SSE
                                      ▼
-                           Diji ajanı (127.0.0.1:8899)
+                           Diji agent (127.0.0.1:8899)
 ```
 
-### Neden `app://` protokolü
+### Why the `app://` protocol
 
-SPA derlemesi `dist/client/_shell.html` üretir ve varlık yolları **mutlak**
-(`/assets/…`). `file://` ile yüklendiğinde bu yollar dosya sisteminin köküne
-gider ve sayfa boş açılır. Bu yüzden:
+The SPA build emits `dist/client/_shell.html` and the asset paths are
+**absolute** (`/assets/…`). When loaded over `file://` those paths resolve to the
+filesystem root and the page opens blank. Therefore:
 
-1. `scripts/prepare-electron.cjs` (kök depoda) `_shell.html`'i `index.html`
-   olarak kopyalar ve `/assets/` → `./assets/` olarak yeniden yazar.
-2. Electron `app://jarvis/` özel protokolünü kaydeder ve `dist/` dizinini sunar.
+1. `scripts/prepare-electron.cjs` (in the root repo) copies `_shell.html` to
+   `index.html` and rewrites `/assets/` → `./assets/`.
+2. Electron registers the `app://jarvis/` custom protocol and serves the `dist/`
+   directory.
 
-### Neden `isSpeaking` türetilir
+### Why `isSpeaking` is derived
 
 ```ts
 // src/hooks/use-agent.ts
 const isSpeaking = ttsStageActive || playbackStageActive;
 ```
 
-Tek bir boolean bayrağa indirilirse barge-in sonrası arayüz `KONUŞUYOR`
-durumunda asılı kalır. Barge-in `llm` + `tts` + `playback` üçünü birlikte
-kapatır; iki aşamaya bakmak bu yarışı tolere eder.
+If it were collapsed into a single boolean flag, the UI would stick on
+`SPEAKING` after a barge-in. Barge-in closes `llm` + `tts` + `playback` together;
+watching two stages tolerates that race.
 
 ---
 
-## Klasör yapısı
+## Folder structure
 
 ```
 ui-app/
 ├── electron/
-│   ├── main.cjs              # Ana süreç: pencere, tray, kısayol, protokol, ajan spawn
+│   ├── main.cjs              # Main process: window, tray, shortcut, protocol, agent spawn
 │   ├── preload.cjs           # contextBridge → window.diji
-│   └── agent-bridge.cjs      # HTTP + SSE istemcisi, sağlık yoklaması
+│   └── agent-bridge.cjs      # HTTP + SSE client, health probe
 ├── src/
 │   ├── routes/
-│   │   ├── __root.tsx        # Kabuk
-│   │   └── index.tsx         # Ana ekran (Quantum Console)
+│   │   ├── __root.tsx        # Shell
+│   │   └── index.tsx         # Main screen (Quantum Console)
 │   ├── hooks/
-│   │   └── use-agent.ts      # Tek doğruluk kaynağı: tüm ajan durumu
+│   │   └── use-agent.ts      # Single source of truth: all agent state
 │   ├── types/
-│   │   └── diji.d.ts         # window.diji sözleşmesi (ajan API'sinin aynası)
-│   └── styles.css            # Tasarım sistemi
-├── dist/                     # Derleme çıktısı (gitignore)
+│   │   └── diji.d.ts         # window.diji contract (mirror of the agent API)
+│   └── styles.css            # Design system
+├── dist/                     # Build output (gitignored)
 ├── vite.config.ts
 ├── tsconfig.json
 └── package.json
@@ -137,17 +138,17 @@ ui-app/
 
 ---
 
-## Ajanla iletişim
+## Talking to the agent
 
-Tüm iletişim `window.diji` üzerinden. Ham `ipcRenderer` veya `fetch`
-**kullanılmaz** — güvenlik yüzeyi dar tutulur.
+All communication goes through `window.diji`. Raw `ipcRenderer` or `fetch` is
+**not used** — the security surface is kept narrow.
 
 ```ts
 interface DijiAPI {
   getState(): Promise<StatePayload>;
   isAvailable(): boolean;
   listen(enabled: boolean): Promise<ListenResult>;
-  ask(text: string): Promise<AskResult>;            // 202, yanıt SSE'den
+  ask(text: string): Promise<AskResult>;            // 202, the reply arrives over SSE
   setTts(enabled: boolean): Promise<TtsResult>;
   confirm(confirmed: boolean): Promise<ConfirmResult>;
   bargeIn(): Promise<BargeInResult>;
@@ -160,121 +161,119 @@ interface DijiAPI {
 }
 ```
 
-Bu arayüz ajan API'sinin **birebir aynasıdır**. Yeni bir uç nokta eklenirse
-önce [`src/types/diji.d.ts`](src/types/diji.d.ts) güncellenir, sonra
-`electron/agent-bridge.cjs` ve `electron/preload.cjs`. Ajan sözleşmeleri için
-[`../docs/API.md`](../docs/API.md) · [English](../docs/en/API.md).
+This interface is a **one-to-one mirror** of the agent API. When a new endpoint
+is added, [`src/types/diji.d.ts`](src/types/diji.d.ts) is updated first, then
+`electron/agent-bridge.cjs` and `electron/preload.cjs`. For the agent contracts
+see [`../docs/API.md`](../docs/API.md).
 
-### SSE olayları
+### SSE events
 
-Ayrım `data` içindeki `type` alanıyladır — yalnızca ilk olay (`snapshot`) ayrı
-bir `event:` satırı taşır:
+Discrimination is by the `type` field inside `data` — only the first event
+(`snapshot`) carries a separate `event:` line:
 
-| `type` | Anlamı |
+| `type` | Meaning |
 |---|---|
-| *(yok — `snapshot`)* | Tam durum gövdesi |
-| `stage` | Bir aşamanın durumu değişti |
-| `log` | Teşhis satırı |
-| `turn-latency` | Tur tamamlandı, gecikme dökümü |
-| `conversation-update` | Sohbet geçmişi (tam liste) |
-| `confirmation` | Onay bekleyen işlem açıldı/kapandı |
-| `tts-toggle` | Seslendirme anahtarı değişti (tray dahil) |
+| *(absent — `snapshot`)* | Full state body |
+| `stage` | A stage changed state |
+| `log` | Diagnostics line |
+| `turn-latency` | A turn completed, latency breakdown |
+| `conversation-update` | Chat history (full list) |
+| `confirmation` | A confirmation-required action opened/closed |
+| `tts-toggle` | The speech-output switch changed (including from the tray) |
 
 ---
 
-## Ekran bölümleri
+## Screen sections
 
-| Bölüm | İçerik |
+| Section | Contents |
 |---|---|
-| **Sol kenar çubuğu** | Navigasyon: Sohbet, Geçmiş, Ayarlar. Geçmiş ve Ayarlar birbirini kapatır. |
-| **Kontrol düğmeleri** | Mikrofon aç/kapat, TTS aç/kapat, Barge-in (kes) |
-| **Sahne** | Ses görselleştirmesi + aşama göstergesi |
-| **Sohbet** | Konuşma geçmişi, metin girişi |
-| **Telemetri** | 8 aşama (AJAN, MİKROFON, VAD, STT, LLM, TTS, OYNATMA, MCP), canlı log |
-| **Onay diyaloğu** | MCP `write`/`delete` için sesli onayla eşzamanlı görsel onay |
+| **Left sidebar** | Navigation: Chat, History, Settings. History and Settings are mutually exclusive. |
+| **Control buttons** | Microphone on/off, TTS on/off, Barge-in (interrupt) |
+| **Stage** | Audio visualisation + stage indicator |
+| **Chat** | Conversation history, text input |
+| **Telemetry** | 8 stages (AGENT, MICROPHONE, VAD, STT, LLM, TTS, PLAYBACK, MCP), live log |
+| **Confirmation dialog** | Visual confirmation synchronised with the voice prompt for MCP `write`/`delete` |
 
 ---
 
-## Ayarlar — model seçimi
+## Settings — model selection
 
-Üç açılır liste: **SES TANIMA (STT)**, **DİL MODELİ (LLM)**, **SESLENDİRME
-(TTS)**. Listeler tamamen **makinede ne varsa** ondan üretilir; sabit bir
-"desteklenen modeller" tablosu yoktur.
+Three dropdowns: **SPEECH RECOGNITION (STT)**, **LANGUAGE MODEL (LLM)**,
+**SPEECH OUTPUT (TTS)**. The lists are produced entirely from **whatever is on
+the machine**; there is no hardcoded "supported models" table.
 
-| Tür | Kaynak | Geçiş maliyeti |
+| Kind | Source | Switch cost |
 |---|---|---|
-| STT | `~/.diji/models/sherpa-onnx-whisper-*` | ~2–6 sn (motor yeniden başlar) |
-| TTS | `~/.diji/models/vits-*` | ~1–3 sn (drifting: ~60–70 sn) |
-| LLM | Yerel sunucunun `/v1/models` yanıtı | Anında |
+| STT | `~/.diji/models/sherpa-onnx-whisper-*` | ~2–6 s (engine restarts) |
+| TTS | `~/.diji/models/vits-*` | ~1–3 s (drifting: ~60–70 s) |
+| LLM | The local server's `/v1/models` response | Instant |
 
-Seçim **kalıcıdır**: `~/.config/diji/env` dosyasına yazılır ve ajan yeniden
-başladığında da geçerli olur. Bildirim bunu açıkça söyler:
+The selection is **persistent**: it is written to `~/.config/diji/env` and
+remains valid after the agent restarts. The notification says so explicitly:
 
 ```
-Değişti: Small — dengeli · kalıcı kaydedildi
+Changed: Small — balanced · saved permanently
 ```
 
-Kalıcılık başarısız olursa (izin hatası vb.) bildirim `· yalnızca bu oturum`
-der ve nedeni ekler. **Geçersiz** seçim (`409`) dosyaya **yazılmaz**.
+If persistence fails (permission error, etc.) the notification says
+`· this session only` and appends the reason. An **invalid** selection (`409`) is
+**not** written to the file.
 
-Ayrıntılar: [`../docs/MODELS.md`](../docs/MODELS.md) ·
-[English](../docs/en/MODELS.md), [`../docs/API.md`](../docs/API.md#post-modelsselect).
+Details: [`../docs/MODELS.md`](../docs/MODELS.md),
+[`../docs/API.md`](../docs/API.md#post-modelsselect).
 
 ---
 
-## Derleme ve paketleme
+## Building and packaging
 
-| Komut | Ne yapar |
+| Command | What it does |
 |---|---|
-| `npm run dev` | Vite dev sunucusu (tarayıcı) |
-| `npm run build` | Üretim derlemesi → `dist/` |
-| `npm run preview` | Derlenmiş çıktıyı önizle |
+| `npm run dev` | Vite dev server (browser) |
+| `npm run build` | Production build → `dist/` |
+| `npm run preview` | Preview the built output |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
 
-Paketleme kök depodaki `scripts/` içinden yürütülür:
+Packaging is driven from `scripts/` in the root repo:
 
 ```bash
-# 1. Ajanı derle
+# 1. Build the agent
 cd .. && npx tsc -b && cd ui-app
 
-# 2. Arayüzü derle
+# 2. Build the UI
 npm run build
 
-# 3. _shell.html → index.html + varlık yolu düzeltmesi
+# 3. _shell.html → index.html + asset path rewrite
 node ../scripts/prepare-electron.cjs
 
-# 4. Electron'u çalıştır
+# 4. Run Electron
 env -u ELECTRON_RUN_AS_NODE npx electron .
 ```
 
 > [!NOTE]
-> `dist/` ve `release/` **gitignore** edilmiştir. Paketlenmiş Electron
-> çıktısı (~865 MB) depoya girmez.
+> `dist/` and `release/` are **gitignored**. The packaged Electron output
+> (~865 MB) never enters the repository.
 
 ---
 
-## Sorun giderme
+## Troubleshooting
 
-| Belirti | Neden | Çözüm |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Beyaz/boş pencere | Varlık yolları çözülmedi | `node ../scripts/prepare-electron.cjs` çalıştır; `dist/index.html` var mı kontrol et |
-| Pencere hiç açılmıyor | `ELECTRON_RUN_AS_NODE=1` ortamda | `env -u ELECTRON_RUN_AS_NODE npx electron .` |
-| Sandbox hatası / renderer çöküyor | Kullanıcı ad alanı kısıtı | `DIJI_ELECTRON_SANDBOX=0`. `--disable-gpu` **eklemeyin** — renderer'ı `exitCode 133` ile öldürür |
-| "Bağlantı yok" ama ajan ayakta | Ajan geç başladı | Köprü 30 sn boyunca yoklar; `/tmp/diji-agent.log`'a bakın |
-| Arayüz `KONUŞUYOR`'da asılı | Barge-in yalnızca oynatmayı kesti | `POST /bargein` üçünü birlikte kapatmalı (ajan tarafı) |
-| Ayarlar listesi boş | Ajan kataloğu okuyamadı | `curl -s 127.0.0.1:8899/models \| jq` |
-| Model seçimi kayboldu | Env yazılamadı | Bildirimdeki `persistError`'a bakın; `stat -c '%a' ~/.config/diji/env` → `600` |
+| White/blank window | Asset paths were not resolved | Run `node ../scripts/prepare-electron.cjs`; check that `dist/index.html` exists |
+| The window never opens | `ELECTRON_RUN_AS_NODE=1` in the environment | `env -u ELECTRON_RUN_AS_NODE npx electron .` |
+| Sandbox error / renderer crashes | User-namespace restriction | `DIJI_ELECTRON_SANDBOX=0`. Do **not** add `--disable-gpu` — it kills the renderer with `exitCode 133` |
+| "Not connected" although the agent is up | The agent started late | The bridge probes for 30 s; check `/tmp/diji-agent.log` |
+| The UI sticks on `SPEAKING` | Barge-in stopped playback only | `POST /bargein` must close all three (agent side) |
+| The Settings list is empty | The agent could not read the catalog | `curl -s 127.0.0.1:8899/models \| jq` |
+| The model selection disappeared | Env could not be written | Check `persistError` in the notification; `stat -c '%a' ~/.config/diji/env` → `600` |
 
-Ajan tarafı sorunlar: [`../docs/MODELS.md`](../docs/MODELS.md),
+Agent-side issues: [`../docs/MODELS.md`](../docs/MODELS.md),
 [`../docs/CONFIGURATION.md`](../docs/CONFIGURATION.md),
-[`../SECURITY.md`](../SECURITY.md) — İngilizce:
-[`../docs/en/MODELS.md`](../docs/en/MODELS.md),
-[`../docs/en/CONFIGURATION.md`](../docs/en/CONFIGURATION.md),
-[`../SECURITY.en.md`](../SECURITY.en.md).
+[`../SECURITY.md`](../SECURITY.md).
 
 ---
 
-## Lisans
+## Licence
 
 [MIT](../LICENSE) — © 2026 Tekin Altun

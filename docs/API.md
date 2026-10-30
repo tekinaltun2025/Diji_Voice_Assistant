@@ -1,23 +1,25 @@
-# Ajan Kontrol API'si
+# Agent Control API
 
-**Türkçe** · [🇬🇧 English](en/API.md)
+**English** · [🇹🇷 Türkçe](API.tr.md)
 
-Ajan, çalışırken `127.0.0.1:8899` üzerinde küçük bir HTTP + SSE sunucusu açar
-([`agent/src/control-server.ts`](../agent/src/control-server.ts)). Masaüstü
-arayüzü ajanı yalnızca bu uç noktalar üzerinden yönetir: mikrofonu, ses
-cihazlarını ve motorları açan süreç **tek** — ajan süreci.
+While running, the agent opens a small HTTP + SSE server on `127.0.0.1:8899`
+([`agent/src/control-server.ts`](../agent/src/control-server.ts)). The desktop
+UI manages the agent **only** through these endpoints: the process that opens the
+microphone, the audio devices and the engines is **one** — the agent process.
 
 > [!IMPORTANT]
-> Sunucu `CONTROL_HOST = '127.0.0.1'` sabitine bağlıdır, `0.0.0.0`'a
-> **açılmaz** ([`control-server.ts:30`](../agent/src/control-server.ts)).
-> Dışarıdan erişilemez; yerel bir süreç olmadan port dinlenmez.
+> The server is bound to the constant `CONTROL_HOST = '127.0.0.1'`; it does
+> **not** listen on `0.0.0.0`
+> ([`control-server.ts:30`](../agent/src/control-server.ts)).
+> It is unreachable from the outside; without a local process the port is not
+> listening at all.
 
 ---
 
-## İçindekiler
+## Table of contents
 
-- [Taşıma katmanı](#taşıma-katmanı)
-- [Uç nokta özeti](#uç-nokta-özeti)
+- [Transport](#transport)
+- [Endpoint summary](#endpoint-summary)
 - [`GET /health`](#get-health)
 - [`GET /state`](#get-state)
 - [`GET /events` — SSE](#get-events--sse)
@@ -29,77 +31,77 @@ cihazlarını ve motorları açan süreç **tek** — ajan süreci.
 - [`POST /bargein`](#post-bargein)
 - [`GET /models`](#get-models)
 - [`POST /models/select`](#post-modelsselect)
-- [SSE olay şemaları](#sse-olay-şemaları)
-- [Hata kodları](#hata-kodları)
-- [cURL ile hızlı denemeler](#curl-ile-hızlı-denemeler)
+- [SSE event schemas](#sse-event-schemas)
+- [Error codes](#error-codes)
+- [Quick cURL recipes](#quick-curl-recipes)
 
 ---
 
-## Taşıma katmanı
+## Transport
 
-| Konu | Değer |
+| Topic | Value |
 |---|---|
-| Ana makine | `127.0.0.1` (sabit) |
-| Varsayılan port | `8899` — `DIJI_CONTROL_PORT` ile değişebilir |
-| Yanıt tipi | `application/json; charset=utf-8` |
-| CORS | `Access-Control-Allow-Origin: *` (yalnızca yerel) |
-| Yöntemler | `GET`, `POST`, `OPTIONS` |
-| Önbellek | `Cache-Control: no-store` |
-| Gövde sınırı | 1 MB (`readBody` üstü keser) |
+| Host | `127.0.0.1` (constant) |
+| Default port | `8899` — override with `DIJI_CONTROL_PORT` |
+| Response type | `application/json; charset=utf-8` |
+| CORS | `Access-Control-Allow-Origin: *` (local only) |
+| Methods | `GET`, `POST`, `OPTIONS` |
+| Caching | `Cache-Control: no-store` |
+| Body limit | 1 MB (`readBody` truncates above it) |
 
-Her JSON yanıtı en az bir `ok: boolean` alanı taşır. `ok:false` durumunda
-genellikle `error: string` bulunur.
+Every JSON response carries at least an `ok: boolean` field. When `ok:false`
+there is usually an `error: string`.
 
 ```ts
 // agent/src/control-server.ts:51
-const send = (res, status, body): void => { /* JSON + CORS başlıkları */ };
+const send = (res, status, body): void => { /* JSON + CORS headers */ };
 ```
 
-`OPTIONS` isteği gövdesiz `204` döner; tarayıcı ön kontrolü için gereklidir.
+An `OPTIONS` request returns an empty `204`; required for browser preflight.
 
 ---
 
-## Uç nokta özeti
+## Endpoint summary
 
-| Yöntem | Yol | Amaç | Tipik durum |
+| Method | Path | Purpose | Typical status |
 |---|---|---|---|
-| `GET` | `/health` | Süreç canlı mı | `200` |
-| `GET` | `/state` | Anlık tam durum görüntüsü | `200` |
-| `GET` | `/events` | Canlı telemetri akışı (SSE) | `200` (akış) |
-| `POST` | `/listen` | Mikrofonu aç/kapat | `200` |
-| `POST` | `/ask` | Metin turu başlat | `202` |
-| `POST` | `/inject` | PCM'i mikrofon gibi besle (teşhis) | `202` |
-| `POST` | `/tts` | Seslendirmeyi aç/kapat | `200` |
-| `POST` | `/confirm` | Bekleyen MCP onayını yanıtla | `200` |
-| `POST` | `/bargein` | Konuşmayı/oynatmayı kes | `200` |
-| `GET` | `/models` | Ayarlar için model kataloğu | `200` |
-| `POST` | `/models/select` | Model değiştir (+ kalıcı kaydet) | `200` / `409` |
+| `GET` | `/health` | Is the process alive | `200` |
+| `GET` | `/state` | Full instantaneous state snapshot | `200` |
+| `GET` | `/events` | Live telemetry stream (SSE) | `200` (stream) |
+| `POST` | `/listen` | Turn the microphone on/off | `200` |
+| `POST` | `/ask` | Start a text turn | `202` |
+| `POST` | `/inject` | Feed PCM as if it came from the mic (diagnostics) | `202` |
+| `POST` | `/tts` | Turn speech output on/off | `200` |
+| `POST` | `/confirm` | Answer a pending MCP confirmation | `200` |
+| `POST` | `/bargein` | Interrupt speech/playback | `200` |
+| `GET` | `/models` | Model catalog for Settings | `200` |
+| `POST` | `/models/select` | Switch model (+ persist) | `200` / `409` |
 
-Boru hattı henüz kurulmadıysa (`getPipeline()` → `null`) dönen uç noktalar
-`503 { ok:false, error:"ajan hazır değil" }` verir.
+If the pipeline has not been constructed yet (`getPipeline()` → `null`), the
+endpoints that need it return `503 { ok:false, error:"agent not ready" }`.
 
 ---
 
 ## `GET /health`
 
-Ajan sürecinin canlılık kontrolü. Arayüzün bağlantı durumu göstergesi ve
-başlatıcı betiklerin bekleme döngüsü bunu kullanır.
+Liveness check for the agent process. The UI connection indicator and the wait
+loop in the launcher scripts both use it.
 
 ```json
 { "ok": true, "pid": 41213, "uptime": 137 }
 ```
 
-| Alan | Tip | Açıklama |
+| Field | Type | Description |
 |---|---|---|
-| `pid` | `number` | Ajan süreç kimliği. Süreci sonlandırmak için bunu kullanın (`pkill -f` **değil** — kendi kabuğunuzu öldürür). |
-| `uptime` | `number` | Saniye cinsinden çalışma süresi. |
+| `pid` | `number` | Agent process id. Use this to terminate the process (**not** `pkill -f` — that kills your own shell). |
+| `uptime` | `number` | Uptime in seconds. |
 
 ---
 
 ## `GET /state`
 
-Arayüzün ihtiyaç duyduğu **her şeyin** tek istekte özeti. Arayüz açılışta bir
-kez çağırır, sonrasını SSE ile günceller.
+A single request summarising **everything** the UI needs. The UI calls it once on
+startup and then keeps it fresh through SSE.
 
 ```jsonc
 {
@@ -114,8 +116,8 @@ kez çağırır, sonrasını SSE ile günceller.
       "isSpeaking": false,
       "isProcessing": false,
       "isBargeIn": false,
-      "lastTranscript": "yarın toplantı var mı",
-      "lastResponse": "Yarın saat 14:00'te bir toplantınız var.",
+      "lastTranscript": "do I have a meeting tomorrow",
+      "lastResponse": "You have a meeting tomorrow at 14:00.",
       "lastTurnLatency": { "totalMs": 1840 }
     },
     "audio": {
@@ -132,7 +134,7 @@ kez çağırır, sonrasını SSE ile günceller.
   "ttsEnabled": true,
   "ttsOverride": null,
   "stages": [ { "key": "stt", "label": "STT", "status": "active", "detail": "…", "metrics": {}, "updatedAt": 1761798123456 } ],
-  "log": [ { "id": 812, "t": 1761798123456, "level": "info", "stage": "mic", "msg": "dinleme açıldı" } ],
+  "log": [ { "id": 812, "t": 1761798123456, "level": "info", "stage": "mic", "msg": "listening enabled" } ],
   "turnMetrics": { "sttMs": 412, "llmFirstTokenMs": 980, "llmTotalMs": 980, "ttsFirstByteMs": 180 },
   "lastTurnLatency": {
     "totalMs": 1840, "vadMs": 620, "sttMs": 412, "sttPreprocessMs": 18,
@@ -143,7 +145,7 @@ kez çağırır, sonrasını SSE ile günceller.
     "mcpServers": [], "sttChars": 22, "replyChars": 41,
     "llmModel": "agent", "measuredAt": 1761798123456
   },
-  "conversation": [ { "id": "m-1", "role": "user", "text": "yarın toplantı var mı", "at": 1761798121000, "source": "voice" } ],
+  "conversation": [ { "id": "m-1", "role": "user", "text": "do I have a meeting tomorrow", "at": 1761798121000, "source": "voice" } ],
   "conversationLimit": 50,
   "stageOrder": ["agent", "mic", "vad", "stt", "llm", "tts", "playback", "mcp"],
   "pendingConfirmation": null,
@@ -151,32 +153,32 @@ kez çağırır, sonrasını SSE ile günceller.
 }
 ```
 
-### Alan sözleşmeleri
+### Field contracts
 
-| Alan | Not |
+| Field | Note |
 |---|---|
-| `stages` | Arayüz panelindeki 8 aşama. `status` ∈ `idle` \| `ready` \| `active` \| `warn` \| `error`. Sıra `stageOrder` ile sabittir. |
-| `audio.acRms` | **Anlık** DC'si çıkarılmış RMS. "Sesim alınıyor mu" sorusunun doğru cevabı budur; `forwardedChunks` kümülatiftir ve ilk turdan sonra hep `>0` kalır. |
-| `ttsEnabled` | Çalışma zamanındaki **gerçek** değer (env + kullanıcı seçimi). |
-| `ttsOverride` | `null` = env geçerli; `true`/`false` = kullanıcı açıkça seçti. |
-| `lastTurnLatency.totalMs` | Tur başı → **ilk ses**. Tam sentez süresi değildir. |
-| `lastTurnLatency` | Aşama süreleri birbirine girer (`vadMs` tur başından öncesine, `playbackMs` ilk sesten sonrasına aittir); toplamları `totalMs` etmez. |
-| `conversation` | Yalnızca **görünen** konuşma. LLM'e giden sistem/tool mesajları burada yoktur. Son `conversationLimit` (50) kayıt tutulur. |
-| `pendingConfirmation` | `null` = bekleyen onay yok. `expiresAt === null` = soru hâlâ seslendiriliyor, sayaç başlamadı. **Uydurulmaz**: yalnızca ajan gerçekten beklerken doludur. |
-| `mcpServers` | Canlı durum. `connected:false` ise araç listesi boştur. |
+| `stages` | The 8 stages shown in the UI panel. `status` ∈ `idle` \| `ready` \| `active` \| `warn` \| `error`. The order is fixed by `stageOrder`. |
+| `audio.acRms` | **Instantaneous** DC-removed RMS. This is the correct answer to "is my voice being captured"; `forwardedChunks` is cumulative and stays `>0` after the first turn. |
+| `ttsEnabled` | The **real** runtime value (env + user choice). |
+| `ttsOverride` | `null` = env applies; `true`/`false` = the user chose explicitly. |
+| `lastTurnLatency.totalMs` | Turn start → **first audio**. Not the full synthesis time. |
+| `lastTurnLatency` | Stage durations overlap (`vadMs` belongs to before the turn start, `playbackMs` to after the first audio); they do not sum to `totalMs`. |
+| `conversation` | The **visible** conversation only. System/tool messages sent to the LLM are not here. The last `conversationLimit` (50) entries are kept. |
+| `pendingConfirmation` | `null` = nothing pending. `expiresAt === null` = the question is still being spoken, the countdown has not started. **Never fabricated**: it is only populated while the agent is genuinely waiting. |
+| `mcpServers` | Live status. If `connected:false` the tool list is empty. |
 
 ---
 
 ## `GET /events` — SSE
 
-Sunucudan istemciye tek yönlü canlı akış. Arayüzün tüm canlılığı buradan gelir.
+A one-way live stream from server to client. All UI liveness comes from here.
 
-**Bağlantı davranışı**
+**Connection behaviour**
 
-1. Yanıt başlıkları `text/event-stream` olarak yazılır.
-2. İlk yazılan satır `retry: 2000` → kopma durumunda istemci 2 sn sonra yeniden bağlanır.
-3. Hemen ardından bir `snapshot` olayı gönderilir ve istemci ilk durumu alır.
-4. İstemci abone listesine eklenir; `req.on('close')` ile çıkarılır.
+1. Response headers are written as `text/event-stream`.
+2. The first line written is `retry: 2000` → on a drop the client reconnects after 2 s.
+3. Immediately afterwards a `snapshot` event is sent, giving the client its initial state.
+4. The client is added to the subscriber list; removed via `req.on('close')`.
 
 ```
 retry: 2000
@@ -190,69 +192,72 @@ data: {"type":"log","entry":{…}}
 ```
 
 > [!NOTE]
-> Yalnızca **ilk** olay `event:` satırı taşır (`snapshot`). Sonraki olaylar
-> `event:` satırı olmadan, yalnızca `data:` olarak yazılır ve ayrım `data`
-> içindeki `type` alanıyla yapılır ([`control-server.ts:65`](../agent/src/control-server.ts)).
-> Bu yüzden istemci `EventSource.onmessage` kullanır, `addEventListener` değil.
+> Only the **first** event carries an `event:` line (`snapshot`). Subsequent
+> events are written as `data:` only and are discriminated by the `type` field
+> inside `data`
+> ([`control-server.ts:65`](../agent/src/control-server.ts)).
+> That is why the client uses `EventSource.onmessage`, not `addEventListener`.
 
 ---
 
 ## `POST /listen`
 
-Mikrofon dinlemesini açar/kapatır. `enabled` **yoksa veya `false` değilse açık**
-kabul edilir.
+Turns microphone listening on/off. If `enabled` is **missing or anything other
+than `false`**, the request is treated as "on".
 
 ```jsonc
-// istek
+// request
 { "enabled": true }
 
-// yanıt
+// response
 { "ok": true, "listening": true }
 ```
 
-| Durum | Gövde |
+| Status | Body |
 |---|---|
-| Ajan yok | `503 { ok:false, error:"ajan hazır değil" }` |
-| Açma hatası | `500 { ok:false, error:"<cihaz hatası>" }` |
+| Agent absent | `503 { ok:false, error:"agent not ready" }` |
+| Open failure | `500 { ok:false, error:"<device error>" }` |
 
-Dinleme durumu ayrıca telemetriye yazılır (`mic` aşaması `ready` ↔ `idle`) ve
-`stage` olayı olarak akışa düşer.
+The listening state is also recorded in telemetry (the `mic` stage flips
+`ready` ↔ `idle`) and is pushed onto the stream as a `stage` event.
 
 ---
 
 ## `POST /ask`
 
-Metin turu başlatır — mikrofonsuz test yolu. **Yanıt metni bu uç noktadan
-dönmez**: istek kabul edilir (`202`), üretim arka planda sürer ve sonuç
-`conversation-update` + `turn-latency` olaylarıyla gelir.
+Starts a text turn — the microphone-free test path. **The response text does not
+come back from this endpoint**: the request is accepted (`202`), generation
+continues in the background and the result arrives as `conversation-update` +
+`turn-latency` events.
 
 ```jsonc
-// istek
-{ "text": "bugün hava nasıl" }
+// request
+{ "text": "what's the weather like today" }
 
-// yanıt — hemen
+// response — immediate
 { "ok": true, "accepted": true }
 ```
 
-| Durum | Koşul |
+| Status | Condition |
 |---|---|
-| `202` | Kabul edildi, işlem sürüyor |
-| `400 { ok:false, error:"metin boş" }` | `text` boş |
-| `503` | Ajan hazır değil |
+| `202` | Accepted, work in progress |
+| `400 { ok:false, error:"text is empty" }` | `text` is empty |
+| `503` | Agent not ready |
 
-İşlem sırasında hata olursa istemciye HTTP kodu dönmez (202 çoktan gitti);
-hata `log` olayı olarak akışa düşer (`level:"error"`, `stage:"llm"`).
+If an error occurs while processing, no HTTP status is returned to the client
+(202 has already been sent); the error appears as a `log` event
+(`level:"error"`, `stage:"llm"`).
 
 ---
 
 ## `POST /inject`
 
-Teşhis yolu: gövdedeki ham PCM'i mikrofon akışıymış gibi boru hattına verir.
-`Content-Type: application/octet-stream` ile **PCM16 / 16 kHz / mono**
-gönderilir — WAV başlığı **olmadan**.
+Diagnostics path: feeds the raw PCM in the body into the pipeline as if it were
+the microphone stream. Sent as `Content-Type: application/octet-stream` with
+**PCM16 / 16 kHz / mono** — with **no** WAV header.
 
 ```bash
-# 16 kHz mono PCM'e çevir, sonra enjekte et
+# convert to 16 kHz mono PCM, then inject
 ffmpeg -i test.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 test.pcm -y
 curl -X POST --data-binary @test.pcm \
      -H 'Content-Type: application/octet-stream' \
@@ -263,92 +268,94 @@ curl -X POST --data-binary @test.pcm \
 { "ok": true, "seconds": 3.42 }
 ```
 
-**Neden gerçek zamanlı besleniyor:** VAD sessizlik süresini duvar saatinden
-ölçer. Tüm PCM tek seferde verilseydi segment hiç kapanmaz, tur algılanmazdı.
-Bu yüzden 100 ms'lik parçalar (`3200` bayt) `setInterval` ile verilir.
+**Why it is fed in real time:** the VAD measures silence duration against the
+wall clock. If all the PCM were delivered at once, the segment would never close
+and no turn would be detected. That is why 100 ms chunks (`3200` bytes) are
+written with `setInterval`.
 
-**Sondaki yapay sessizlik:** Gerçek mikrofonda konuşma bittikten sonra da
-sessiz parçalar gelmeye devam eder ve VAD "konuşma bitti" kararını verir.
-Enjeksiyonda bu doğal olarak yoktur; bu yüzden gövdeden sonra **1,5 sn**
-(15 × 100 ms) sıfır PCM eklenir. Bu olmadan segment kapanmaz.
+**Trailing synthetic silence:** with a real microphone, silent chunks keep
+arriving after speech ends, which is what lets the VAD decide "speech finished".
+Injection has no such tail, so **1.5 s** (15 × 100 ms) of zero PCM is appended
+after the body. Without it the segment never closes.
 
-| Durum | Koşul |
+| Status | Condition |
 |---|---|
-| `202` | Kabul edildi |
-| `400 { ok:false, error:"PCM çok kısa (en az 100 ms gerekli)" }` | Gövde < 3200 bayt |
-| `503` | Ajan hazır değil |
+| `202` | Accepted |
+| `400 { ok:false, error:"PCM too short (at least 100 ms required)" }` | Body < 3200 bytes |
+| `503` | Agent not ready |
 
 ---
 
 ## `POST /tts`
 
-Seslendirmeyi çalışma zamanında açar/kapatır. Üç durumludur:
+Turns speech output on/off at runtime. It is tri-state:
 
-| Gövde | Anlamı |
+| Body | Meaning |
 |---|---|
-| `{ "enabled": true }` | Zorla aç |
-| `{ "enabled": false }` | Zorla kapat |
-| `{}` veya `{ "enabled": null }` | Override'ı temizle → `DIJI_TTS_ENABLED` env değerine dön |
+| `{ "enabled": true }` | Force on |
+| `{ "enabled": false }` | Force off |
+| `{}` or `{ "enabled": null }` | Clear the override → fall back to the `DIJI_TTS_ENABLED` env value |
 
 ```jsonc
 { "ok": true, "enabled": true, "override": true }
 ```
 
-Değişiklik `tts-toggle` SSE olayıyla tüm istemcilere yayılır, böylece tray
-menüsü ve arayüz aynı anda güncellenir.
+The change is broadcast to every client as a `tts-toggle` SSE event, so the tray
+menu and the UI update at the same time.
 
 ---
 
 ## `POST /confirm`
 
-Bekleyen MCP onayını yanıtlar. `confirmed === true` **dışındaki her değer
-reddir** (Katı eşitlik: `"true"` string'i onay sayılmaz).
+Answers a pending MCP confirmation. **Anything other than `confirmed === true` is
+a rejection** (strict equality: the string `"true"` is not an approval).
 
 ```jsonc
-// istek
+// request
 { "confirmed": true }
 
-// yanıt
+// response
 { "ok": true, "applied": true }
 ```
 
-### Yarış durumu ve çözümü
+### The race condition and its fix
 
-[`requestVoiceConfirmation()`](../agent/src/pipeline.ts) onay kaydını
-TTS'ten **önce** yayınlar (`expiresAt: null`) ama bekleyen promise'i seslendirme
-bittikten **sonra** kurar. Arayüz diyaloğu erken açtığı için kullanıcı hemen
-"Onayla"ya basarsa istek `applied:false` ile sessizce kayboluyordu.
+[`requestVoiceConfirmation()`](../agent/src/pipeline.ts) publishes the
+confirmation record **before** TTS (`expiresAt: null`) but installs the pending
+promise **after** speech finishes. Because the UI opens the dialog early, a user
+pressing "Approve" immediately used to have the request silently vanish with
+`applied:false`.
 
-Çözüm: kayıt duruyorsa en fazla 5 sn boyunca 100 ms aralıklarla yeniden
-denenir. Bekleyen onay yoksa hemen `applied:false` döner.
+Fix: while the record exists, the request is retried at 100 ms intervals for up
+to 5 s. If nothing is pending, it returns `applied:false` immediately.
 
-| `applied` | Anlamı |
+| `applied` | Meaning |
 |---|---|
-| `true` | Karar iletildi, işlem sürüyor/sürdü |
-| `false` | Bekleyen işlem yok (zaman aşımı, zaten yanıtlandı, hiç yoktu) |
+| `true` | Decision delivered, work is/was in progress |
+| `false` | Nothing pending (timed out, already answered, never existed) |
 
 ---
 
 ## `POST /bargein`
 
-Süren yanıtı keser: LLM akışı, TTS sentezi ve hoparlör kuyruğu **birlikte**
-kapatılır. Gövde gerekmez.
+Interrupts an in-flight response: the LLM stream, TTS synthesis and the speaker
+queue are shut down **together**. No body required.
 
 ```jsonc
 { "ok": true }
 ```
 
 > [!WARNING]
-> Üçünü birden kapatmak zorunludur. Yalnızca oynatma durdurulursa arayüz
-> `KONUŞUYOR` durumunda asılı kalır çünkü `isSpeaking` `tts` **veya**
-> `playback` aşamasının aktif olmasından türetilir.
+> Closing all three is mandatory. If only playback is stopped, the UI sticks on
+> `SPEAKING` because `isSpeaking` is derived from the `tts` **or** `playback`
+> stage being active.
 
 ---
 
 ## `GET /models`
 
-Ayarlar ekranının model listeleri. Katalog **tamamen makinede ne varsa** ondan
-üretilir — sabit bir "desteklenen modeller" tablosu yoktur
+The model lists for the Settings screen. The catalog is produced **entirely from
+whatever is on the machine** — there is no hardcoded "supported models" table
 ([`agent/src/model-catalog.ts`](../agent/src/model-catalog.ts)).
 
 ```jsonc
@@ -357,141 +364,143 @@ Ayarlar ekranının model listeleri. Katalog **tamamen makinede ne varsa** ondan
   "stt": {
     "current": "small",
     "options": [
-      { "id": "small",  "label": "Small — dengeli (önerilen)", "available": true, "detail": "int8 · 484 MB" },
-      { "id": "medium", "label": "Medium — yüksek doğruluk, yavaş", "available": false, "detail": "dosya eksik" }
+      { "id": "small",  "label": "Small — balanced (recommended)", "available": true, "detail": "int8 · 484 MB" },
+      { "id": "medium", "label": "Medium — higher accuracy, slower", "available": false, "detail": "files missing" }
     ]
   },
   "tts": {
     "current": "vits-piper-tr_TR-fettah-medium",
     "options": [
-      { "id": "vits-piper-tr_TR-fettah-medium", "label": "Piper · Türkçe · fettah medium", "available": true, "detail": "model.onnx + tokens.txt" }
+      { "id": "vits-piper-tr_TR-fettah-medium", "label": "Piper · Turkish · fettah medium", "available": true, "detail": "model.onnx + tokens.txt" }
     ]
   },
   "llm": {
     "current": "agent",
     "options": [
-      { "id": "agent", "label": "agent", "available": true, "detail": "yerel sunucu" },
-      { "id": "coder", "label": "coder", "available": true, "detail": "yerel sunucu" }
+      { "id": "agent", "label": "agent", "available": true, "detail": "local server" },
+      { "id": "coder", "label": "coder", "available": true, "detail": "local server" }
     ]
   },
-  "modelsDir": "/home/<kullanıcı>/.diji/models"
+  "modelsDir": "/home/<user>/.diji/models"
 }
 ```
 
-### Katalog kaynakları
+### Catalog sources
 
-| Tür | Kaynak | Koşul |
+| Kind | Source | Condition |
 |---|---|---|
-| `stt` | `~/.diji/models/sherpa-onnx-whisper-<önek>/` | `<önek>-encoder*.onnx`, `<önek>-decoder*.onnx`, `<önek>-tokens.txt` **üçü de** gerekir |
+| `stt` | `~/.diji/models/sherpa-onnx-whisper-<prefix>/` | `<prefix>-encoder*.onnx`, `<prefix>-decoder*.onnx`, `<prefix>-tokens.txt` — **all three** |
 | `tts` | `~/.diji/models/vits-*` | `.onnx` + `tokens.txt` |
-| `llm` | `http://127.0.0.1:8000/v1/models` | 2,5 sn zaman aşımı; sunucu kapalıysa boş liste |
+| `llm` | `http://127.0.0.1:8000/v1/models` | 2.5 s timeout; empty list if the server is down |
 
-`current` alanı **çalışan motorun gerçek kimliğidir**, yapılandırma değeri
-değil. Ayrım önemli: `drifting-tts` başlatılamazsa motor sessizce
-`sherpa-vits`'e düşer ve `config.tts.provider` yanıltıcı olur.
+The `current` field is the **real identity of the running engine**, not the
+configured value. The distinction matters: if `drifting-tts` fails to start, the
+engine silently falls back to `sherpa-vits` and `config.tts.provider` would be
+misleading.
 
-`modelsDir` `DIJI_MODELS_DIR` ile değiştirilebilir; teşhis için yanıtta
-döndürülür.
+`modelsDir` can be changed with `DIJI_MODELS_DIR`; it is returned in the response
+for diagnostics.
 
 > [!NOTE]
-> Katalog `/state` içinde **değildir**: LLM listesi yerel sunucuya HTTP isteği
-> gerektirir (~2,5 sn) ve `/state` her arayüz açılışında çağrılır. Bu yüzden
-> katalog ayrı ve isteğe bağlıdır; yalnızca Ayarlar paneli açılınca çekilir.
+> The catalog is **not** part of `/state`: the LLM list requires an HTTP request
+> to the local server (~2.5 s) and `/state` is called on every UI startup. The
+> catalog is therefore separate and on-demand; it is fetched only when the
+> Settings panel opens.
 
-| Durum | Koşul |
+| Status | Condition |
 |---|---|
-| `500 { ok:false, error }` | Katalog üretilemedi (disk izni, tarama hatası) |
-| `503` | Ajan hazır değil |
+| `500 { ok:false, error }` | Catalog could not be built (disk permission, scan error) |
+| `503` | Agent not ready |
 
 ---
 
 ## `POST /models/select`
 
-Model değiştirir ve seçimi **kalıcı** olarak `~/.config/diji/env` dosyasına
-yazar.
+Switches the model and writes the choice **persistently** to
+`~/.config/diji/env`.
 
 ```jsonc
-// istek
+// request
 { "kind": "stt", "id": "medium" }
 
-// yanıt — başarılı
+// response — success
 {
   "ok": true,
   "current": "medium",
   "persisted": true,
-  "persistHint": "Seçim kalıcı kaydedildi (~/.config/diji/env)"
+  "persistHint": "Selection saved permanently (~/.config/diji/env)"
 }
 ```
 
-### `kind` değerleri ve geçiş maliyeti
+### `kind` values and switch cost
 
-| `kind` | Ne olur | Süre |
+| `kind` | What happens | Duration |
 |---|---|---|
-| `llm` | Yalnızca model adı sonraki istekte gövdeye yazılır; motor yeniden başlamaz | Anında |
-| `stt` | `STTEngine` dispose + yeniden oluşturma (`modelPriority:[id, …]`) | ~2–6 sn |
-| `tts` (VITS) | `TTSEngine` dispose + yeniden oluşturma | ~1–3 sn |
-| `tts` (`drifting-tts`) | Python köprüsü yeniden başlar | ~60–70 sn → `slow:true` |
+| `llm` | Only the model name is put into the next request body; the engine is not restarted | Instant |
+| `stt` | `STTEngine` disposed and rebuilt (`modelPriority:[id, …]`) | ~2–6 s |
+| `tts` (VITS) | `TTSEngine` disposed and rebuilt | ~1–3 s |
+| `tts` (`drifting-tts`) | The Python bridge restarts | ~60–70 s → `slow:true` |
 
-### Yanıt alanları
+### Response fields
 
-| Alan | Tip | Açıklama |
+| Field | Type | Description |
 |---|---|---|
-| `ok` | `boolean` | Değişim gerçekleşti mi |
-| `current` | `string` | Değişim sonrası **çalışan** model kimliği |
-| `reason` | `string?` | `ok:false` ise nedeni |
-| `slow` | `boolean?` | Geçiş uzun sürdü (drifting-tts) |
-| `persisted` | `boolean?` | Env dosyasına yazıldı mı |
-| `persistError` | `string?` | Yazma başarısızsa nedeni (izin, disk) |
-| `persistHint` | `string?` | Kullanıcıya gösterilecek hazır not |
+| `ok` | `boolean` | Did the switch happen |
+| `current` | `string` | The **running** model id after the switch |
+| `reason` | `string?` | Why, when `ok:false` |
+| `slow` | `boolean?` | The switch was slow (drifting-tts) |
+| `persisted` | `boolean?` | Was it written to the env file |
+| `persistError` | `string?` | Why the write failed (permission, disk) |
+| `persistHint` | `string?` | Ready-made note to show the user |
 
-### `persisted` / `ok` ayrımı — bilinçli karar
+### Why `persisted` / `ok` are separate — a deliberate decision
 
-Kalıcılık yazımı başarısız olsa bile model **bu süreçte değişmiştir**, bu
-yüzden yanıt `ok:true` kalır ve `persisted:false` ile ayrıca bildirilir. Arayüz
-`· kalıcı kaydedildi` / `· yalnızca bu oturum` notunu buna göre kurar. Alternatif
-(tek bir `ok` alanına iki anlam yüklemek) sessiz veri kaybına yol açardı.
+Even when the persistence write fails, the model **has changed in this process**,
+so the response stays `ok:true` and the failure is reported separately via
+`persisted:false`. The UI builds its `· saved permanently` / `· this session
+only` note from that. The alternative (overloading a single `ok` field with two
+meanings) would have caused silent data loss.
 
-### Yazılan anahtarlar
+### Keys written
 
-| `kind` | Yazılan anahtarlar |
+| `kind` | Keys written |
 |---|---|
 | `llm` | `DIJI_LLM_MODEL` |
 | `stt` | `DIJI_STT_MODEL_PREFIX`, `DIJI_STT_MODEL` |
-| `tts` (dizin) | `DIJI_TTS_PROVIDER=sherpa-vits`, `DIJI_TTS_VITS_MODEL` |
-| `tts` (sağlayıcı) | `DIJI_TTS_PROVIDER` |
+| `tts` (directory) | `DIJI_TTS_PROVIDER=sherpa-vits`, `DIJI_TTS_VITS_MODEL` |
+| `tts` (provider) | `DIJI_TTS_PROVIDER` |
 
-Yazma sözleşmesi: satır satır (yorumlar korunur), yinelenen anahtarların
-**hepsi** güncellenir, atomik (`temp` + `rename`), kip `0600`, **asla throw
-etmez** ([`agent/src/env-prefs.ts`](../agent/src/env-prefs.ts)).
+Write contract: line by line (comments preserved), **all** duplicate keys
+updated, atomic (`temp` + `rename`), mode `0600`, **never throws**
+([`agent/src/env-prefs.ts`](../agent/src/env-prefs.ts)).
 
-### Aynı modeli yeniden seçmek
+### Re-selecting the same model
 
-Motor **yeniden başlatılmaz**. Ölçüldü: gereksiz yeniden başlatma 8 sn ölü
-zaman ve mikrofonun boşa kesilmesi demekti. Bu durumda yalnızca kalıcılık
-yazılır ve `ok:true` döner.
+The engine is **not** restarted. Measured: an unnecessary restart meant 8 s of
+dead time and the microphone being cut for nothing. In this case only the
+persistence write happens and `ok:true` is returned.
 
-### Durum kodları
+### Status codes
 
-| Kod | Koşul | Örnek |
+| Code | Condition | Example |
 |---|---|---|
-| `200` | Değişim başarılı (kalıcılık başarısız olsa da) | `{ ok:true, current:"medium", persisted:true }` |
-| `400` | `kind` geçersiz / `id` boş | `{ ok:false, error:"kind stt\|tts\|llm olmalı" }` |
-| `409` | Model seçilemez (diskte yok, sunucuda yok, motor hazır değil) | `{ ok:false, current:"small", reason:"model diskte bulunamadı" }` |
-| `503` | Ajan hazır değil | `{ ok:false, error:"ajan hazır değil" }` |
+| `200` | Switch succeeded (even if persistence failed) | `{ ok:true, current:"medium", persisted:true }` |
+| `400` | Invalid `kind` / empty `id` | `{ ok:false, error:"kind must be stt\|tts\|llm" }` |
+| `409` | Model cannot be selected (not on disk, not on the server, engine not ready) | `{ ok:false, current:"small", reason:"model not found on disk" }` |
+| `503` | Agent not ready | `{ ok:false, error:"agent not ready" }` |
 
 > [!IMPORTANT]
-> `409` durumunda **env dosyasına hiçbir şey yazılmaz**. Doğrulandı: geçersiz
-> `large-v3` denemesinden sonra `grep -c large-v3 ~/.config/diji/env` → `0`.
-> Geçersiz bir seçimin kalıcı hale gelmesi, ajanın bir sonraki açılışta
-> kırılması demek olurdu.
+> On `409` **nothing is written to the env file**. Verified: after an invalid
+> `large-v3` attempt, `grep -c large-v3 ~/.config/diji/env` → `0`.
+> Persisting an invalid choice would mean the agent breaking on the next start.
 
 ---
 
-## SSE olay şemaları
+## SSE event schemas
 
-Tüm olaylar `data: <json>\n\n` biçiminde gelir. Ayrım `type` alanıyladır —
-`snapshot` **istisnadır** (ayrı `event:` satırı taşır ve `type` alanı yoktur,
-doğrudan `StatePayload` gövdesidir).
+All events arrive as `data: <json>\n\n`. Discrimination is by the `type` field —
+`snapshot` is the **exception** (it carries a separate `event:` line and has no
+`type` field; it is the `StatePayload` body directly).
 
 ### `snapshot`
 
@@ -499,23 +508,23 @@ doğrudan `StatePayload` gövdesidir).
 { "ok": true, "pid": 41213, … }
 ```
 
-Tam [`GET /state`](#get-state) gövdesi. Bağlantı kurulduğu anda bir kez gelir;
-sonrasında parçalı güncellemeler akar.
+The full [`GET /state`](#get-state) body. It arrives once when the connection is
+established; partial updates stream afterwards.
 
 ### `stage`
 
-Bir aşamanın durumu değişti.
+A stage changed state.
 
 ```jsonc
-{ "type": "stage", "state": { "key": "stt", "label": "STT", "status": "active", "detail": "transkripsiyon…", "metrics": { "ms": "412" }, "updatedAt": 1761798123456 } }
+{ "type": "stage", "state": { "key": "stt", "label": "STT", "status": "active", "detail": "transcribing…", "metrics": { "ms": "412" }, "updatedAt": 1761798123456 } }
 ```
 
 ### `log`
 
-Teşhis panelindeki satır.
+A line for the diagnostics panel.
 
 ```jsonc
-{ "type": "log", "entry": { "id": 812, "t": 1761798123456, "level": "info", "stage": "mic", "msg": "dinleme açıldı" } }
+{ "type": "log", "entry": { "id": 812, "t": 1761798123456, "level": "info", "stage": "mic", "msg": "listening enabled" } }
 ```
 
 `level` ∈ `info` \| `warn` \| `error`. `stage` ∈ `agent`, `mic`, `vad`, `stt`,
@@ -523,44 +532,45 @@ Teşhis panelindeki satır.
 
 ### `turn-latency`
 
-Bir tur tamamlandı (ilk ses çıktı). Döküm
-[`TurnLatency`](../agent/src/telemetry.ts) tipindedir.
+A turn completed (first audio emitted). The breakdown is of type
+[`TurnLatency`](../agent/src/telemetry.ts).
 
 ```jsonc
 { "type": "turn-latency", "latency": { "totalMs": 1840, "sttMs": 412, "llmMs": 980, "ttsFirstChunkMs": 180, "…": "…" } }
 ```
 
 > [!NOTE]
-> `turnToken` mekanizması, eşzamanlı turlarda ölçümün sıfırlanmasını önler:
-> eski bir turun geç biten olayı yeni turun sayaçlarını ezmez.
+> The `turnToken` mechanism prevents measurements from being reset by concurrent
+> turns: a late-arriving event from an old turn does not overwrite the counters
+> of a new one.
 
 ### `conversation-update`
 
-Sohbet geçmişi değişti. **Tam liste** gönderilir; istemci durumu idempotent
-biçimde eşitler (ekleme/silme ayrımı yapmak zorunda kalmaz).
+The chat history changed. The **full list** is sent; the client reconciles
+idempotently (it never has to reason about add vs. delete).
 
 ```jsonc
 {
   "type": "conversation-update",
   "conversation": [
-    { "id": "m-1", "role": "user", "text": "yarın toplantı var mı", "at": 1761798121000, "source": "voice" },
-    { "id": "m-2", "role": "assistant", "text": "Yarın 14:00'te toplantınız var.", "at": 1761798122000, "source": "voice", "latencyMs": 1840 }
+    { "id": "m-1", "role": "user", "text": "do I have a meeting tomorrow", "at": 1761798121000, "source": "voice" },
+    { "id": "m-2", "role": "assistant", "text": "You have a meeting at 14:00 tomorrow.", "at": 1761798122000, "source": "voice", "latencyMs": 1840 }
   ]
 }
 ```
 
 ### `confirmation`
 
-Onay bekleyen işlem açıldı / kapandı.
+A confirmation-required action opened or closed.
 
 ```jsonc
-{ "type": "confirmation", "pending": { "server": "gmail", "tool": "gmail.send_message", "permission": "write", "reason": "e-posta göndermek yazma izni gerektirir", "question": "…", "requestedAt": 1761798121000, "expiresAt": 1761798141000 } }
+{ "type": "confirmation", "pending": { "server": "gmail", "tool": "gmail.send_message", "permission": "write", "reason": "sending email requires write permission", "question": "…", "requestedAt": 1761798121000, "expiresAt": 1761798141000 } }
 { "type": "confirmation", "pending": null }
 ```
 
 ### `tts-toggle`
 
-Seslendirme anahtarı değişti (tray veya arayüz).
+The speech-output switch changed (tray or UI).
 
 ```jsonc
 { "type": "tts-toggle", "enabled": false }
@@ -568,67 +578,71 @@ Seslendirme anahtarı değişti (tray veya arayüz).
 
 ---
 
-## Hata kodları
+## Error codes
 
-| Kod | Anlamı | Tipik neden |
+| Code | Meaning | Typical cause |
 |---|---|---|
-| `200` | Başarılı | — |
-| `202` | Kabul edildi, işlem sürüyor | `/ask`, `/inject` |
-| `204` | Gövdesiz (CORS ön kontrolü) | `OPTIONS` |
-| `400` | Geçersiz istek gövdesi | `kind`/`id`/`text` boş veya geçersiz |
-| `409` | Model seçilemedi | Diskte/sunucuda yok, motor hazır değil |
-| `500` | Sunucu hatası | Cihaz açılamadı, katalog üretilemedi |
-| `503` | Ajan hazır değil | Boru hattı henüz kurulmadı |
+| `200` | Success | — |
+| `202` | Accepted, work in progress | `/ask`, `/inject` |
+| `204` | Empty body (CORS preflight) | `OPTIONS` |
+| `400` | Invalid request body | `kind`/`id`/`text` empty or invalid |
+| `409` | Model could not be selected | Not on disk/server, engine not ready |
+| `500` | Server error | Device could not be opened, catalog build failed |
+| `503` | Agent not ready | The pipeline has not been constructed yet |
 
 ---
 
-## cURL ile hızlı denemeler
+## Quick cURL recipes
 
 ```bash
-# Canlı mı?
+# Alive?
 curl -s http://127.0.0.1:8899/health
 
-# Tam durum
+# Full state
 curl -s http://127.0.0.1:8899/state | jq '.stages[] | {key, status, detail}'
 
-# Canlı akış (ilk 200 satır)
+# Live stream (first 200 lines)
 curl -N http://127.0.0.1:8899/events | head -200
 
-# Mikrofonu aç
+# Enable the microphone
 curl -s -X POST -H 'Content-Type: application/json' \
      -d '{"enabled":true}' http://127.0.0.1:8899/listen
 
-# Metin turu (yanıt SSE'den gelir)
+# Text turn (the reply arrives over SSE)
 curl -s -X POST -H 'Content-Type: application/json' \
-     -d '{"text":"merhaba"}' http://127.0.0.1:8899/ask
+     -d '{"text":"hello"}' http://127.0.0.1:8899/ask
 
-# Model listesi
+# Model list
 curl -s http://127.0.0.1:8899/models | jq '.stt'
 
-# Model değiştir (kalıcı)
+# Switch model (persistent)
 curl -s -X POST -H 'Content-Type: application/json' \
      -d '{"kind":"llm","id":"coder"}' http://127.0.0.1:8899/models/select
 
-# Geçersiz seçim → 409, env'e YAZILMAZ
+# Invalid choice → 409, NOT written to env
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
      -H 'Content-Type: application/json' \
      -d '{"kind":"stt","id":"large-v3"}' http://127.0.0.1:8899/models/select
 
-# Seslendirmeyi kapat
+# Disable speech output
 curl -s -X POST -H 'Content-Type: application/json' \
      -d '{"enabled":false}' http://127.0.0.1:8899/tts
 ```
 
-Betikler hazır: [`scripts/smoke-test.js`](../scripts/smoke-test.js),
+Ready-made scripts: [`scripts/smoke-test.js`](../scripts/smoke-test.js),
 [`scripts/control-e2e.js`](../scripts/control-e2e.js),
 [`scripts/inject-e2e.js`](../scripts/inject-e2e.js),
 [`scripts/verify-stt-chain.js`](../scripts/verify-stt-chain.js).
 
 ---
 
-## İlgili belgeler
+## Related documents
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — katmanlar, ses boru hattı, tur yaşam döngüsü
-- [CONFIGURATION.md](CONFIGURATION.md) — ortam değişkenleri ve `~/.config/diji/env`
-- [MODELS.md](MODELS.md) — model dosyaları, boyutlar, lisanslar
-- [SECURITY.md](../SECURITY.md) — tehdit modeli, izin kapısı ([English](../SECURITY.en.md))
+- [ARCHITECTURE.md](ARCHITECTURE.md) — layers, audio pipeline, turn lifecycle
+- [CONFIGURATION.md](CONFIGURATION.md) — environment variables and `~/.config/diji/env`
+- [MODELS.md](MODELS.md) — model files, sizes, licences
+- [../SECURITY.md](../SECURITY.md) — threat model, permission gate
+
+Turkish originals: [`API.tr.md`](API.tr.md), [`ARCHITECTURE.tr.md`](ARCHITECTURE.tr.md),
+[`CONFIGURATION.tr.md`](CONFIGURATION.tr.md), [`MODELS.tr.md`](MODELS.tr.md),
+[`../SECURITY.tr.md`](../SECURITY.tr.md).

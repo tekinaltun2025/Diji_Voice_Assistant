@@ -1,224 +1,229 @@
-# Modeller
+# Models
 
-**Türkçe** · [🇬🇧 English](en/MODELS.md)
+**English** · [🇹🇷 Türkçe](MODELS.tr.md)
 
-Diji'nin tüm ses motorları **yerel** çalışır. Konuşma, transkript ve yanıt
-metni hiçbir bulut servisine gönderilmez. Model dosyaları kod deposunda
-**tutulmaz** (`.gitignore` ağırlıkları dışlar); `~/.diji/models` altına
-indirilir.
+Every speech engine in Diji runs **locally**. Speech, transcripts and response
+text are never sent to any cloud service. Model files are **not** kept in the
+code repository (`.gitignore` excludes the heavy artefacts); they are downloaded
+into `~/.diji/models`.
 
 ---
 
-## İçindekiler
+## Table of contents
 
-- [Model dizini](#model-dizini)
-- [Dosya yerleşimi](#dosya-yerleşimi)
-- [Hızlı indirme](#hızlı-indirme)
+- [Model directory](#model-directory)
+- [File layout](#file-layout)
+- [Quick download](#quick-download)
 - [STT — Whisper](#stt--whisper)
 - [VAD — Silero](#vad--silero)
-- [TTS — iki arka uç](#tts--iki-arka-uç)
-- [LLM — yerel sunucu](#llm--yerel-sunucu)
-- [Model seçimi ve kalıcılık](#model-seçimi-ve-kalıcılık)
-- [Elle model ekleme](#elle-model-ekleme)
-- [Lisanslar](#lisanslar)
-- [Sorun giderme](#sorun-giderme)
+- [TTS — two backends](#tts--two-backends)
+- [LLM — local server](#llm--local-server)
+- [Model selection and persistence](#model-selection-and-persistence)
+- [Adding a model manually](#adding-a-model-manually)
+- [Licences](#licences)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## Model dizini
+## Model directory
 
 ```
 ~/.diji/models/
 ```
 
-`DIJI_MODELS_DIR` ile değiştirilebilir. Dört tüketici de aynı değişkeni okur:
+Overridable with `DIJI_MODELS_DIR`. All four consumers read the same variable:
 [`stt.ts:113`](../agent/src/stt.ts), [`vad.ts:79`](../agent/src/vad.ts),
 [`tts.ts:70`](../agent/src/tts.ts),
-[`model-catalog.ts:50`](../agent/src/model-catalog.ts). Ajan, VAD ve Ayarlar
-paneli **aynı** dizini gördüğünden liste ile gerçek yükleme tutarlıdır.
+[`model-catalog.ts:50`](../agent/src/model-catalog.ts). Because the agent, the
+VAD and the Settings panel see the **same** directory, the list matches what
+actually loads.
 
 ---
 
-## Dosya yerleşimi
+## File layout
 
 ```
 ~/.diji/models/
 ├── silero_vad.onnx                          # VAD (633 KB)
-├── sherpa-onnx-whisper-small/               # STT (1.3 GB — int8 + fp32 birlikte)
+├── sherpa-onnx-whisper-small/               # STT (1.3 GB — int8 + fp32 together)
 │   ├── small-encoder.int8.onnx              #   108 MB
 │   ├── small-decoder.int8.onnx              #   251 MB
 │   ├── small-encoder.onnx                   #   391 MB
 │   ├── small-decoder.onnx                   #   534 MB
 │   ├── small-tokens.txt                     #   798 KB
-│   └── test_wavs/                           #   örnekler
+│   └── test_wavs/                           #   samples
 └── vits-piper-tr_TR-fettah-medium/          # TTS (61 MB)
     ├── tr_TR-fettah-medium.onnx             #   61 MB
     ├── tr_TR-fettah-medium.onnx.json
     ├── tokens.txt
     ├── MODEL_CARD
-    └── espeak-ng-data/                      #   çok dilli fonemleştirme
+    └── espeak-ng-data/                      #   multilingual phonemisation
 ```
 
 > [!NOTE]
-> Whisper paketleri **hem** int8 **hem** fp32 ağırlıkları birlikte getirir.
-> Diji `computeType: 'int8'` kullandığı için yalnızca `*.int8.onnx` dosyaları
-> yüklenir; fp32 dosyalar diskte yer kaplar ama kullanılmaz. Yer sıkıntısı
-> varsa `*-encoder.onnx` ve `*-decoder.onnx` (int8 olmayanlar) silinebilir.
+> Whisper bundles ship **both** int8 **and** fp32 weights. Because Diji uses
+> `computeType: 'int8'`, only the `*.int8.onnx` files are loaded; the fp32 files
+> take up disk space without being used. If you are short on space you can delete
+> `*-encoder.onnx` and `*-decoder.onnx` (the non-int8 ones).
 
 ---
 
-## Hızlı indirme
+## Quick download
 
 ```bash
 ./scripts/download-models.sh all         # VAD + Whisper medium + VITS
-./scripts/download-models.sh stt         # yalnızca Whisper (varsa medium, yoksa indirir)
+./scripts/download-models.sh stt         # Whisper only (medium if present, else downloads)
 ./scripts/download-models.sh stt-small   # Whisper small
 ./scripts/download-models.sh stt-base
 ./scripts/download-models.sh stt-tiny
-./scripts/download-models.sh stt-large   # large-v3 (CPU'da çok yavaş)
-./scripts/download-models.sh tts         # yalnızca VITS
-./scripts/download-models.sh vad         # yalnızca Silero
+./scripts/download-models.sh stt-large   # large-v3 (very slow on CPU)
+./scripts/download-models.sh tts         # VITS only
+./scripts/download-models.sh vad         # Silero only
 ```
 
-Betik idempotenttir: hedef dizin dolu ise **atlar**, yeniden indirmez
+The script is idempotent: if the target directory is populated it **skips** and
+does not re-download
 ([`download-models.sh:29`](../scripts/download-models.sh)).
 
-Tüm dosyalar `github.com/k2-fsa/sherpa-onnx/releases` üzerinden gelir; ek bir
-hesap veya API anahtarı gerekmez.
+All files come from `github.com/k2-fsa/sherpa-onnx/releases`; no extra account or
+API key is needed.
 
 ---
 
 ## STT — Whisper
 
-sherpa-onnx Whisper paketleri. Türkçe için en iyi yerel seçenek.
+sherpa-onnx Whisper packages. The best local option for Turkish.
 
-### Dosya koşulu — üçü birden zorunlu
+### File condition — all three required
 
-Model **yüklenebilir** sayılması için şu üç dosya gerekir
+For a model to count as **loadable**, these three files are needed
 ([`model-catalog.ts:97`](../agent/src/model-catalog.ts)):
 
-| Dosya | Desen |
+| File | Pattern |
 |---|---|
-| Encoder | `<önek>-encoder*.onnx` |
-| Decoder | `<önek>-decoder*.onnx` |
-| Tokenizer | `<önek>-tokens.txt` **veya** `tokens.txt` |
+| Encoder | `<prefix>-encoder*.onnx` |
+| Decoder | `<prefix>-decoder*.onnx` |
+| Tokenizer | `<prefix>-tokens.txt` **or** `tokens.txt` |
 
-Biri eksikse model listede **görünür ama soluk** (`available: false`,
-`detail: "dosya eksik"`) ve seçilemez. Bu bilinçlidir: kullanıcı neyin neden
-çalışmadığını görebilmeli.
+If one is missing, the model **appears** in the list but greyed out
+(`available: false`, `detail: "files missing"`) and cannot be selected. This is
+deliberate: the user should be able to see what is missing and why it does not
+work.
 
-### Dizin adlandırma
+### Directory naming
 
-İki biçim kabul edilir, ilk bulunan kullanılır:
+Two forms are accepted; the first found wins:
 
-1. `sherpa-onnx-whisper-<önek>` ← indirme betiğinin ürettiği
-2. `whisper-<önek>`
+1. `sherpa-onnx-whisper-<prefix>` ← what the download script produces
+2. `whisper-<prefix>`
 
-### Boyut ve doğruluk dengesi
+### Size vs. accuracy trade-off
 
-| Model | Yaklaşık boyut (int8) | Türkçe doğruluk | CPU gecikmesi | Öneri |
+| Model | Approx. size (int8) | Turkish accuracy | CPU latency | Recommendation |
 |---|---|---|---|---|
-| `tiny` | ~40 MB | En düşük | En hızlı | Yalnızca deneme |
-| `base` | ~75 MB | Düşük | Hızlı | Zayıf donanım |
-| `small` | **359 MB** (108+251) | Dengeli | ~0,4 sn | **Varsayılan öneri** |
-| `medium` | ~770 MB | Yüksek | ~2–3× small | Doğruluk önceliği |
-| `large-v3` | ~1,5 GB | En yüksek | Çok yavaş | Gerçek zamanlı için uygun değil |
+| `tiny` | ~40 MB | Lowest | Fastest | Experimentation only |
+| `base` | ~75 MB | Low | Fast | Weak hardware |
+| `small` | **359 MB** (108+251) | Balanced | ~0.4 s | **Default recommendation** |
+| `medium` | ~770 MB | High | ~2–3× small | Accuracy first |
+| `large-v3` | ~1.5 GB | Highest | Very slow | Not viable for real time |
 
-Tablo değerleri **bu makinede ölçülen** dosya boyutlarına ve gözlemlenen
-gecikmelere dayanır; farklı donanımda değişir. `small` int8 dosya boyutları
-yukarıdaki `ls` çıktısından alınmıştır.
+The table values are based on file sizes **measured on this machine** and
+observed latencies; they differ on other hardware. The `small` int8 file sizes
+above come from the `ls` output shown earlier.
 
-### Öncelik çözümlemesi
+### Priority resolution
 
 ```
-buildSttPriority() → [DIJI_STT_MODEL_PREFIX, ...DIJI_STT_MODEL_PRIORITY (tekrarsız)]
+buildSttPriority() → [DIJI_STT_MODEL_PREFIX, ...DIJI_STT_MODEL_PRIORITY (deduplicated)]
 ```
 
-Diskte listede **ilk bulunan** model yüklenir. Varsayılan sıra
-`medium,small,base,tiny` — yani medium varsa o, yoksa small. Bu yüzden
-`download-models.sh stt` medium'u tercih eder.
+The model **first found** on disk in that list is loaded. The default order is
+`medium,small,base,tiny` — so medium if present, otherwise small. That is why
+`download-models.sh stt` prefers medium.
 
 > [!WARNING]
-> Ön ek listesi tek elemana indirilmez. İndirilseydi, seçilen model diskten
-> silindiğinde ajan **hiç açılmazdı**. Yedekler korunduğu için sessizce bir
-> alt modele düşer ve açılmaya devam eder.
+> The prefix list is never reduced to a single element. If it were, deleting the
+> selected model from disk would mean the agent **would not start at all**. With
+> the fallbacks kept, it silently degrades to a smaller model and keeps working.
 
-### Türkçe kalite ayarları
+### Turkish quality settings
 
-| Ayar | Değer | Neden |
+| Setting | Value | Why |
 |---|---|---|
-| `DIJI_STT_LANGUAGE` | `tr` | Dil zorlaması; otomatik algılama Türkçe'de kararsız |
-| `trimSilence` | açık | Whisper sessiz bölgede halüsinasyon üretir |
-| `trimThreshold` | `0.006` | Ölçülen sessiz oda tabanına göre |
-| Yüksek geçiren | 80 Hz | Masa/klavye gürültüsünü keser |
-| AGC | hedef RMS 0,06 / azami 18 dB | Kullanıcı mikrofonun uzağındaysa kurtarır |
-| Son işleme sözlüğü | gmail, takvim, notion, slack, drive, chrome, e-posta, toplantı, hatırlatıcı, etkinlik | Alan terimlerinin yanlış transkripsiyonunu düzeltir |
+| `DIJI_STT_LANGUAGE` | `tr` | Language forcing; auto-detection is unstable for Turkish |
+| `trimSilence` | on | Whisper hallucinates over silent regions |
+| `trimThreshold` | `0.006` | Based on the measured quiet-room floor |
+| High-pass | 80 Hz | Cuts desk/keyboard rumble |
+| AGC | target RMS 0.06 / max 18 dB | Rescues users far from the microphone |
+| Postprocess dictionary | gmail, calendar, notion, slack, drive, chrome, email, meeting, reminder, event | Fixes mis-transcription of domain terms |
 
 ---
 
 ## VAD — Silero
 
-| Özellik | Değer |
+| Property | Value |
 |---|---|
-| Dosya | `~/.diji/models/silero_vad.onnx` |
-| Boyut | 633 KB |
-| Örnekleme | 16 kHz mono |
-| Eşik | `DIJI_VAD_THRESHOLD` = `0.5` |
-| Asgari sessizlik | `DIJI_VAD_MIN_SILENCE` = `0.6` sn |
-| Asgari konuşma | `DIJI_VAD_MIN_SPEECH` = `0.25` sn |
+| File | `~/.diji/models/silero_vad.onnx` |
+| Size | 633 KB |
+| Sampling | 16 kHz mono |
+| Threshold | `DIJI_VAD_THRESHOLD` = `0.5` |
+| Minimum silence | `DIJI_VAD_MIN_SILENCE` = `0.6` s |
+| Minimum speech | `DIJI_VAD_MIN_SPEECH` = `0.25` s |
 
-Bu tek dosya yoksa ajan **açılmaz**: mikrofon akışından segment üretilemez.
-`download-models.sh vad` ile indirilir; betik dosya varsa atlar.
+Without this single file the agent **will not start**: no segments can be
+produced from the microphone stream. Download with
+`download-models.sh vad`; the script skips if the file exists.
 
 ---
 
-## TTS — iki arka uç
+## TTS — two backends
 
-### 1. `drifting-tts` (birincil, varsayılan)
+### 1. `drifting-tts` (primary, default)
 
-| Özellik | Değer |
+| Property | Value |
 |---|---|
 | Model | `Vyvo/drifting-tts-tr` |
-| Parametre | 89,3 M |
-| Türkçe WER | %1,33 (Freya-TR-Eval) |
-| Doğal örnekleme | 24 kHz |
-| Çalışma biçimi | Python alt süreci ([`scripts/drifting_tts_bridge.py`](../scripts/drifting_tts_bridge.py)), stdio JSON çerçeveleri |
-| Gerekli | Python 3 + model ağırlıkları (HuggingFace) |
+| Parameters | 89.3 M |
+| Turkish WER | 1.33 % (Freya-TR-Eval) |
+| Native sampling | 24 kHz |
+| How it runs | Python child process ([`scripts/drifting_tts_bridge.py`](../scripts/drifting_tts_bridge.py)), stdio JSON frames |
+| Requires | Python 3 + model weights (HuggingFace) |
 
-**Neden Python köprüsü:** model PyTorch tabanlıdır; Node'dan doğrudan
-yüklenemez. Ajan `spawn` ile bir Python alt süreci açar ve iki yönlü JSON
-satırları üzerinden konuşur.
+**Why a Python bridge:** the model is PyTorch-based and cannot be loaded directly
+from Node. The agent `spawn`s a Python child process and talks to it over
+bidirectional JSON lines.
 
 > [!IMPORTANT]
-> Bu makinede `drifting-tts` **başlamıyor** — Python köprüsü `code=null` ile
-> ölüyor. Motor bunu algılayıp sessizce `sherpa-vits`'e düşer
-> ([`tts.ts:385`](../agent/src/tts.ts)). Bu yüzden Ayarlar panelinde
-> **çalışan** motor `sherpa-vits` görünür, `config.tts.provider` değil.
+> On this machine `drifting-tts` **does not start** — the Python bridge dies with
+> `code=null`. The engine detects this and silently falls back to `sherpa-vits`
+> ([`tts.ts:385`](../agent/src/tts.ts)). That is why the Settings panel shows
+> `sherpa-vits` as the **running** engine, not `config.tts.provider`.
 
-Geçiş maliyeti yüksektir: sağlayıcı değiştirildiğinde Python köprüsü yeniden
-başlar ve ~60–70 sn sürer → `POST /models/select` yanıtında `slow: true`.
+The switch cost is high: changing the provider restarts the Python bridge, which
+takes ~60–70 s → `slow: true` in the `POST /models/select` response.
 
-### 2. `sherpa-vits` (yedek, bu makinede fiilen çalışan)
+### 2. `sherpa-vits` (fallback, effectively the one running here)
 
-| Özellik | Değer |
+| Property | Value |
 |---|---|
 | Model | `vits-piper-tr_TR-fettah-medium` |
-| Boyut | 61 MB |
-| Konuşmacı | Tek (Fettah, erkek, medium kalite) |
-| Fonemleştirme | `espeak-ng-data` (paket içinde) |
-| Örnekleme | `DIJI_TTS_SAMPLE_RATE` = 48 kHz |
-| Gerekli | `.onnx` + `tokens.txt` |
+| Size | 61 MB |
+| Speaker | Single (Fettah, male, medium quality) |
+| Phonemisation | `espeak-ng-data` (bundled) |
+| Sampling | `DIJI_TTS_SAMPLE_RATE` = 48 kHz |
+| Requires | `.onnx` + `tokens.txt` |
 
-Dosya koşulu: dizinde **en az bir** `.onnx` **ve** `tokens.txt`
-([`model-catalog.ts:142`](../agent/src/model-catalog.ts)). `espeak-ng-data`
-alt dizini varsa etiket `espeak-ng`, yoksa `tek konuşmacı` gösterilir.
+File condition: at least one `.onnx` **and** `tokens.txt` in the directory
+([`model-catalog.ts:142`](../agent/src/model-catalog.ts)). If an
+`espeak-ng-data` subdirectory exists the label shows `espeak-ng`, otherwise
+`single speaker`.
 
-Geçiş maliyeti ~1–3 sn (motor dispose + yeniden oluşturma).
+Switch cost is ~1–3 s (engine dispose + rebuild).
 
-### Sağlayıcı seçimi
+### Provider selection
 
 ```bash
-# sherpa-vits'e sabitle (bu makinede önerilen)
+# Pin to sherpa-vits (recommended on this machine)
 DIJI_TTS_PROVIDER=sherpa-vits
 DIJI_TTS_VITS_MODEL=vits-piper-tr_TR-fettah-medium
 
@@ -229,106 +234,111 @@ DIJI_TTS_PYTHON=python3
 ```
 
 > [!CAUTION]
-> `DIJI_TTS_MODEL` **her iki** sağlayıcıda okunur. drifting model kimliği
-> (`Vyvo/drifting-tts-tr`) sherpa'ya sızarsa motor `vits-` dizini bulamaz ve
-> TTS sessizce ölür. Bu yüzden sherpa için **ayrı** `DIJI_TTS_VITS_MODEL`
-> anahtarı vardır ve Ayarlar ekranı onu yazar.
+> `DIJI_TTS_MODEL` is read by **both** providers. If the drifting model id
+> (`Vyvo/drifting-tts-tr`) leaks into sherpa, the engine cannot find a `vits-`
+> directory and TTS dies silently. That is why sherpa has its **own**
+> `DIJI_TTS_VITS_MODEL` key, and the Settings screen writes it.
 
-### Karşılaştırma
+### Comparison
 
 | | `drifting-tts` | `sherpa-vits` |
 |---|---|---|
-| Kalite | Daha doğal (89 M, tek adım) | İyi, "medium" VITS |
-| Bağımlılık | Python 3 + PyTorch | Yok (saf onnx) |
-| İlk yükleme | ~60–70 sn | ~1–3 sn |
-| Geçiş | ~60–70 sn (`slow:true`) | ~1–3 sn |
-| Bu makinede | Başlamıyor | **Çalışıyor** |
+| Quality | More natural (89 M, single step) | Good, "medium" VITS |
+| Dependency | Python 3 + PyTorch | None (pure onnx) |
+| First load | ~60–70 s | ~1–3 s |
+| Switch | ~60–70 s (`slow:true`) | ~1–3 s |
+| On this machine | Does not start | **Works** |
 
 ---
 
-## LLM — yerel sunucu
+## LLM — local server
 
-Diji bir model **dosyası** taşımaz; OpenAI uyumlu yerel bir sunucuya bağlanır.
+Diji does not ship a model **file**; it connects to an OpenAI-compatible local
+server.
 
 ```bash
-# Varsayılan
+# Default
 DIJI_LLM_BASE_URL=http://127.0.0.1:8000/v1
 DIJI_LLM_MODEL=agent
 DIJI_LLM_API_KEY=sk-local
 ```
 
-### Sağlık kontrolü
+### Health check
 
-Ajan açılışta `GET {baseUrl}/models` çağırır (2,5 sn zaman aşımı). Sunucu
-kapalıysa ajan **yine açılır**; Ayarlar panelinde tek satır `available:false` /
-`detail: "LLM sunucusuna ulaşılamadı"` görünür. Böylece kullanıcı "seçili" ile
-"seçilebilir" ayrımını görür.
+On startup the agent calls `GET {baseUrl}/models` (2.5 s timeout). If the server
+is down the agent **still starts**; the Settings panel shows a single row with
+`available:false` / `detail: "LLM server unreachable"`. This lets the user tell
+"selected" apart from "selectable".
 
-### Katalog kaynağı ve kimlik biçimi
+### Catalog source and id format
 
-`llama.cpp` sunucuları `/v1/models` yanıtında **tam dosya yolu** döndürebilir:
+`llama.cpp` servers may return **full file paths** in the `/v1/models` response:
 
 ```jsonc
 { "data": [ { "id": "/home/user/models/agent.gguf", "details": { "parameter_size": "8B", "quantization_level": "Q4_K_M" } } ] }
 ```
 
-Bu durumda:
+In that case:
 
-- `label` → dosya adı, `.gguf` uzantısı kırpılmış (`agent`)
-- `id` → **tam yol** (seçimde bu gönderilir; sunucu bu adla eşleştirir)
-- `detail` → `8B · Q4_K_M · metin`
+- `label` → the file name with the `.gguf` extension stripped (`agent`)
+- `id` → the **full path** (this is what is sent on selection; the server matches on it)
+- `detail` → `8B · Q4_K_M · text`
 
-Kimliği kırpıp `agent` göndermek sunucuda eşleşmez → bu yüzden tam yol korunur.
+Sending a trimmed id (`agent`) would not match on the server — hence the full
+path is preserved.
 
-### Reasoning bütçesi
+### Reasoning budget
 
-`agent` hibrit reasoning modelidir: yanıttan önce ~1.500 token düşünme metni
-üretir ve bu metin `DIJI_LLM_MAX_TOKENS` bütçesinden düşer.
+`agent` is a hybrid reasoning model: it emits ~1,500 tokens of thinking text
+before the answer and that text is deducted from the `DIJI_LLM_MAX_TOKENS`
+budget.
 
-| `DIJI_LLM_REASONING_RESERVE` | Sonuç |
+| `DIJI_LLM_REASONING_RESERVE` | Outcome |
 |---|---|
-| `0` | Reasoning modeli için **boş yanıt** |
-| `1024` (varsayılan) | Dengeli |
-| `2048` | Güvenli üst sınır |
-| `4256` | Ölçüldü: 91 sn'ye kadar düşünme |
+| `0` | **Empty response** for a reasoning model |
+| `1024` (default) | Balanced |
+| `2048` | Safe upper bound |
+| `4256` | Measured: up to 91 s of thinking |
 
-Reasoning kullanmayan modeller (ör. `coder`) için `0` uygun olabilir.
+For models that do not use reasoning (e.g. `coder`), `0` may be appropriate.
 
 ---
 
-## Model seçimi ve kalıcılık
+## Model selection and persistence
 
-Ayarlar ekranı `/models` kataloğunu okur, `/models/select` ile değiştirir.
-Ayrıntılı sözleşme [API.md](API.md#post-modelsselect) içinde.
+The Settings screen reads the `/models` catalog and switches with
+`/models/select`. The detailed contract is in
+[API.md](API.md#post-modelsselect).
 
-| Tür | Geçiş | Kalıcı anahtar |
+| Kind | Switch | Persistent key |
 |---|---|---|
-| `llm` | Anında | `DIJI_LLM_MODEL` |
-| `stt` | ~2–6 sn | `DIJI_STT_MODEL_PREFIX` + `DIJI_STT_MODEL` |
-| `tts` (VITS) | ~1–3 sn | `DIJI_TTS_PROVIDER=sherpa-vits` + `DIJI_TTS_VITS_MODEL` |
-| `tts` (drifting) | ~60–70 sn | `DIJI_TTS_PROVIDER=drifting-tts` |
+| `llm` | Instant | `DIJI_LLM_MODEL` |
+| `stt` | ~2–6 s | `DIJI_STT_MODEL_PREFIX` + `DIJI_STT_MODEL` |
+| `tts` (VITS) | ~1–3 s | `DIJI_TTS_PROVIDER=sherpa-vits` + `DIJI_TTS_VITS_MODEL` |
+| `tts` (drifting) | ~60–70 s | `DIJI_TTS_PROVIDER=drifting-tts` |
 
-Seçim `~/.config/diji/env` dosyasına yazılır; ajan yeniden başladığında da
-geçerlidir. **Geçersiz** seçim (`409`) env dosyasına **yazılmaz** — aksi halde
-ajan bir sonraki açılışta kırılırdı.
+The choice is written to `~/.config/diji/env` and survives agent restarts. An
+**invalid** choice (`409`) is **not** written to the env file — otherwise the
+agent would break on the next start.
 
-Aynı modeli yeniden seçmek motoru yeniden başlatmaz (ölçüldü: gereksiz yeniden
-başlatma 8 sn ölü zaman + mikrofonun boşa kesilmesi). Yalnızca kalıcılık yazılır.
+Re-selecting the same model does not restart the engine (measured: an unnecessary
+restart cost 8 s of dead time plus the microphone being cut). Only the
+persistence write happens.
 
-Canlı doğrulama:
+Live verification:
 
 ```bash
-# 1. Mevcut durum
+# 1. Current state
 curl -s http://127.0.0.1:8899/models | jq '{stt:.stt.current, tts:.tts.current, llm:.llm.current}'
 
-# 2. Değiştir
+# 2. Switch
 curl -s -X POST -H 'Content-Type: application/json' \
      -d '{"kind":"stt","id":"small"}' http://127.0.0.1:8899/models/select
 
-# 3. Kalıcı yazıldı mı?
+# 3. Was it persisted?
 grep -E '^DIJI_(STT|LLM|TTS)' ~/.config/diji/env
 
-# 4. Yeniden başlat ve aynı değerleri gör
+# 4. Restart and see the same values
 kill "$(curl -s http://127.0.0.1:8899/health | jq -r .pid)"
 node agent/dist/index.js &
 sleep 5
@@ -337,24 +347,25 @@ curl -s http://127.0.0.1:8899/models | jq '{stt:.stt.current, tts:.tts.current, 
 
 ---
 
-## Elle model ekleme
+## Adding a model manually
 
-Katalog **tamamen diskten** üretilir. Yani yeni bir model eklemek için indirme
-betiğini beklemek gerekmez — doğru yerleşimle kopyalamak yeterlidir.
+The catalog is built **entirely from disk**. So adding a new model does not
+require waiting for the download script — copying it into the right layout is
+enough.
 
 ### Whisper
 
 ```bash
-# 1. Paketi indir ve aç
+# 1. Download and extract the package
 curl -fL -o /tmp/whisper.tar.bz2 \
   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-medium.tar.bz2
 tar -xf /tmp/whisper.tar.bz2 -C ~/.diji/models/
 
-# 2. Üç dosyanın varlığını doğrula (üçü de zorunlu)
+# 2. Verify the three files exist (all three required)
 ls ~/.diji/models/sherpa-onnx-whisper-medium/ \
    | grep -E 'medium-(encoder|decoder).*\.onnx|tokens\.txt'
 
-# 3. Ayarlar panelini yenile → model listede görünür
+# 3. Refresh the Settings panel → the model appears in the list
 ```
 
 ### VITS
@@ -364,69 +375,74 @@ curl -fL -o /tmp/vits.tar.bz2 \
   https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-tr_TR-fettah-medium.tar.bz2
 tar -xf /tmp/vits.tar.bz2 -C ~/.diji/models/
 
-# .onnx + tokens.txt olmalı
+# must contain .onnx + tokens.txt
 ls ~/.diji/models/vits-*/
 ```
 
-Dizin adı `vits-` ile **başlamalıdır**; katalog taraması bu ön eke bakıyor.
+The directory name **must** start with `vits-`; the catalog scan keys off that
+prefix.
 
 ---
 
-## Lisanslar
+## Licences
 
-### Bu depo
+### This repository
 
-Kaynak kod **MIT** — bkz. [LICENSE](../LICENSE). © 2026 Tekin Altun.
+The source code is **MIT** — see [LICENSE](../LICENSE). © 2026 Tekin Altun.
 
-### Üçüncü taraf modeller
+### Third-party models
 
-Model ağırlıkları bu depoda **bulunmaz** ve MIT kapsamı dışındadır. Kendi
-lisansları geçerlidir:
+Model weights are **not** included in this repository and are outside the MIT
+scope. Their own licences apply:
 
-| Bileşen | Lisans | Not |
+| Component | Licence | Note |
 |---|---|---|
-| **OpenAI Whisper** (ağırlıklar) | MIT | sherpa-onnx paketleri Whisper ağırlıklarını taşır |
-| **sherpa-onnx** (çalışma zamanı) | Apache-2.0 | k2-fsa |
-| **Silero VAD** | MIT | Silero ekibi |
-| **Piper / VITS** (`vits-piper-tr_TR-fettah-medium`) | MIT | Piper projesi; ses verisi kendi koşullarına tabi olabilir |
-| **espeak-ng** | GPL-3.0 | Yalnızca VITS fonemleştirme verisi olarak paket içinde gelir |
-| **Vyvo / drifting-tts-tr** | Model kartına bakın | HuggingFace modeli; kullanım koşullarını kontrol edin |
-| **Electron** | MIT | Masaüstü kabuğu |
-| **TanStack Start / React** | MIT | Arayüz |
+| **OpenAI Whisper** (weights) | MIT | sherpa-onnx packages carry the Whisper weights |
+| **sherpa-onnx** (runtime) | Apache-2.0 | k2-fsa |
+| **Silero VAD** | MIT | Silero team |
+| **Piper / VITS** (`vits-piper-tr_TR-fettah-medium`) | MIT | Piper project; voice data may be subject to its own terms |
+| **espeak-ng** | GPL-3.0 | Ships inside the package as VITS phonemisation data only |
+| **Vyvo / drifting-tts-tr** | See the model card | HuggingFace model; check the usage terms |
+| **Electron** | MIT | Desktop shell |
+| **TanStack Start / React** | MIT | UI |
 
 > [!NOTE]
-> `espeak-ng` verisi GPL-3.0'dır ve **ayrı bir süreç/veri olarak** kullanılır;
-> Diji kaynak kodu türev çalışma sayılmaz. Yine de ticari dağıtım
-> planlıyorsanız kendi hukuki değerlendirmenizi yapın.
+> The `espeak-ng` data is GPL-3.0 and is used **as separate process/data**; the
+> Diji source code is not a derivative work. Still, if you plan commercial
+> distribution, do your own legal review.
 
-### LLM modelleri
+### LLM models
 
-Yerel sunucunuzdaki modellerin lisansları (Llama, Qwen, Mistral, Gemma …)
-tamamen size aittir; Diji yalnızca HTTP istemcisidir.
+Licences for the models on your local server (Llama, Qwen, Mistral, Gemma …) are
+entirely up to you; Diji is only an HTTP client.
 
 ---
 
-## Sorun giderme
+## Troubleshooting
 
-| Belirti | Neden | Çözüm |
+| Symptom | Cause | Fix |
 |---|---|---|
-| Model listede **soluk** (`available:false`) | Dosya eksik | `detail` alanını okuyun; `download-models.sh` ile indirin |
-| STT listesi **boş** | `~/.diji/models` yok veya ön ek uyuşmuyor | `ls ~/.diji/models`; dizin adı `sherpa-onnx-whisper-*` veya `whisper-*` olmalı |
-| LLM listesinde tek satır "ulaşılamadı" | Yerel sunucu kapalı | `curl http://127.0.0.1:8000/v1/models` |
-| TTS sessiz ama seçim başarılı | `drifting-tts` başlayamadı, yedek de yok | `DIJI_TTS_PROVIDER=sherpa-vits` yapın, VITS dizinini doğrulayın |
-| STT "small" seçildi ama medium yükleniyor | Ön ek etkisiz kalmış | `buildSttPriority()` düzeltmesinin derlendiğinden emin olun; `grep STT ~/.config/diji/env` |
-| Seçim yeniden başlatınca kayboluyor | Env dosyası okunmuyor veya yazılamıyor | `stat -c '%a' ~/.config/diji/env` → `600`; `DIJI_*` değerleri `default.ts`'te `process.env` ile okunuyor mu? |
-| Model var ama "yüklenemedi" | int8 dosyası eksik, yalnızca fp32 var | `ls <dizin>/*int8*`; yoksa tam paketi indirin |
-| `large-v3` 409 döndürüyor | Diskte yok | `download-models.sh stt-large` |
+| Model is **greyed out** in the list (`available:false`) | File missing | Read the `detail` field; download with `download-models.sh` |
+| STT list is **empty** | `~/.diji/models` missing or prefix mismatch | `ls ~/.diji/models`; the directory must be `sherpa-onnx-whisper-*` or `whisper-*` |
+| Single "unreachable" row in the LLM list | Local server is down | `curl http://127.0.0.1:8000/v1/models` |
+| TTS is silent although the selection succeeded | `drifting-tts` failed to start and there is no fallback | Set `DIJI_TTS_PROVIDER=sherpa-vits`, verify the VITS directory |
+| "small" selected but medium loads | Prefix had no effect | Make sure the `buildSttPriority()` fix is compiled; `grep STT ~/.config/diji/env` |
+| Selection is lost after restart | Env file not read or not writable | `stat -c '%a' ~/.config/diji/env` → `600`; are the `DIJI_*` values read via `process.env` in `default.ts`? |
+| Model present but "failed to load" | int8 file missing, only fp32 present | `ls <dir>/*int8*`; download the full package |
+| `large-v3` returns 409 | Not on disk | `download-models.sh stt-large` |
 
-Ayrıntılı tanı: [ARCHITECTURE.md](ARCHITECTURE.md),
+Further diagnostics: [ARCHITECTURE.md](ARCHITECTURE.md),
 [CONFIGURATION.md](CONFIGURATION.md), [API.md](API.md).
 
 ---
 
-## İlgili belgeler
+## Related documents
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — model yönetimi katmanı
-- [API.md](API.md) — `/models` ve `/models/select` sözleşmeleri
-- [CONFIGURATION.md](CONFIGURATION.md) — tüm `DIJI_*` değişkenleri
-- [SECURITY.md](../SECURITY.md) — model dosyalarının bütünlüğü, ağ erişimi ([English](../SECURITY.en.md))
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the model management layer
+- [API.md](API.md) — `/models` and `/models/select` contracts
+- [CONFIGURATION.md](CONFIGURATION.md) — all `DIJI_*` variables
+- [../SECURITY.md](../SECURITY.md) — model file integrity, network access
+
+Turkish originals: [`MODELS.tr.md`](MODELS.tr.md), [`ARCHITECTURE.tr.md`](ARCHITECTURE.tr.md),
+[`API.tr.md`](API.tr.md), [`CONFIGURATION.tr.md`](CONFIGURATION.tr.md),
+[`../SECURITY.tr.md`](../SECURITY.tr.md).

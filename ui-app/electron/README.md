@@ -40,5 +40,5 @@ Notes:
   works from the root path and `localStorage` persists.
 - The microphone permission is granted locally in `electron/main.cjs`.
 - AI responses and service connections are **not** wired up in this package; the
-  full contract lives in [`../README.en.md`](../README.en.md) and
-  [`../../docs/en/API.md`](../../docs/en/API.md).
+  full contract lives in [`../README.md`](../README.md) and
+  [`../../docs/API.md`](../../docs/API.md).

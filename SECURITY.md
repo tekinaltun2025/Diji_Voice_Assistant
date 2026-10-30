@@ -1,191 +1,195 @@
-# Güvenlik Politikası
+# Security Policy
 
-**Türkçe** · [🇬🇧 English](SECURITY.en.md)
+**English** · [Türkçe](SECURITY.tr.md)
 
-Diji bir **sesli asistan**dır: mikrofonu açar, konuşmayı yerel olarak yazıya
-çevirir, yerel bir dil modeline gönderir ve yanıtı seslendirir. Ayrıca MCP
-araçlarıyla Gmail, Takvim, Drive, Notion, Slack ve tarayıcıya erişebilir.
+Diji is a **voice assistant**: it opens the microphone, transcribes speech
+locally, sends it to a local language model and speaks the answer. It can also
+reach Gmail, Calendar, Drive, Notion, Slack and the browser through MCP tools.
 
-Bu belge, sistemin **gerçekten** neyi koruduğunu ve neyi korumadığını anlatır.
-Abartılı güvenlik iddiaları yerine tehdit modelini açıkça yazmak amaçlanmıştır.
-
----
-
-## İçindekiler
-
-- [Tehdit modeli](#tehdit-modeli)
-- [Tasarım gereği güvenli olan şeyler](#tasarım-gereği-güvenli-olan-şeyler)
-- [İzin kapısı](#i̇zin-kapısı)
-- [Kontrol sunucusu](#kontrol-sunucusu)
-- [Electron izolasyonu](#electron-i̇zolasyonu)
-- [Sır yönetimi](#sır-yönetimi)
-- [Ses gizliliği](#ses-gizliliği)
-- [Bilinen sınırlar](#bilinen-sınırlar)
-- [Sertleştirme kontrol listesi](#sertleştirme-kontrol-listesi)
-- [Güvenlik açığı bildirimi](#güvenlik-açığı-bildirimi)
+This document describes what the system **actually** protects and what it does
+not. The goal is to state the threat model plainly instead of making inflated
+security claims.
 
 ---
 
-## Tehdit modeli
+## Table of contents
 
-### Korunanlar
+- [Threat model](#threat-model)
+- [Secure by design](#secure-by-design)
+- [Permission gate](#permission-gate)
+- [Control server](#control-server)
+- [Electron isolation](#electron-isolation)
+- [Secret management](#secret-management)
+- [Audio privacy](#audio-privacy)
+- [Known limits](#known-limits)
+- [Hardening checklist](#hardening-checklist)
+- [Reporting a vulnerability](#reporting-a-vulnerability)
 
-| Varlık | Neden önemli |
+---
+
+## Threat model
+
+### What is protected
+
+| Asset | Why it matters |
 |---|---|
-| Mikrofon akışı | Ham ses; konuşma içeriği ve ortam bilgisi taşır |
-| Transkript ve yanıtlar | Kişisel/ticari içerik |
-| OAuth2 token'ları | Gmail/Takvim/Drive/Notion/Slack hesaplarına erişim |
-| LLM API anahtarı | Yerel olsa da yapılandırma dosyasında durur |
-| MCP araç yetkileri | E-posta gönderme, etkinlik oluşturma, dosya okuma |
+| Microphone stream | Raw audio; carries speech content and ambient information |
+| Transcripts and replies | Personal/business content |
+| OAuth2 tokens | Access to Gmail/Calendar/Drive/Notion/Slack accounts |
+| LLM API key | Local, but still stored in a configuration file |
+| MCP tool permissions | Sending email, creating events, reading files |
 
-### Varsayılan olarak güvenilen
+### Trusted by default
 
-| Varsayım | Sonuç |
+| Assumption | Consequence |
 |---|---|
-| İşletim sistemi ve kullanıcı hesabı | Aynı kullanıcı hesabında çalışan her süreç bu verilere erişebilir. Diji bunu engellemez. |
-| `127.0.0.1` | Yerel makinedeki diğer süreçler güvenilir kabul edilir. |
-| Yerel LLM sunucusu | `127.0.0.1:8000` üzerindeki sunucu güvenilirdir. |
-| Model dosyaları | `~/.diji/models` içeriği değiştirilmemiştir. |
+| The operating system and the user account | Any process running under the same user account can reach this data. Diji does not prevent that. |
+| `127.0.0.1` | Other processes on the local machine are considered trusted. |
+| The local LLM server | The server on `127.0.0.1:8000` is trusted. |
+| Model files | The contents of `~/.diji/models` have not been tampered with. |
 
-### Kapsam dışı (Diji'nin savunmadığı)
+### Out of scope (Diji does not defend against these)
 
-- Aynı kullanıcı hesabında çalışan kötü niyetli bir sürecin belleği okuması
-- Fiziksel erişim (mikrofonu doğrudan dinleme)
-- İşletim sistemi çekirdeği veya ses alt sistemi ele geçirilmesi
-- Ağ üzerinden gelen saldırılar (kontrol sunucusu yereldir; açık değildir)
-- Yerel LLM sunucusunun kendi güvenliği
+- A malicious process under the same user account reading memory
+- Physical access (listening to the microphone directly)
+- Compromise of the OS kernel or the audio subsystem
+- Network-originated attacks (the control server is local; it is not exposed)
+- The security of the local LLM server itself
 
 ---
 
-## Tasarım gereği güvenli olan şeyler
+## Secure by design
 
-### 1. Bulut yok
+### 1. No cloud
 
-Ses, transkript ve yanıt **hiçbir üçüncü taraf servise** gitmez:
+Audio, transcripts and replies **never** go to a third-party service:
 
-- STT: `sherpa-onnx` yerel (Whisper ağırlıkları diskte)
-- VAD: `silero_vad.onnx` yerel
-- TTS: yerel VITS veya yerel Python köprüsü
-- LLM: `127.0.0.1` üzerindeki OpenAI uyumlu sunucu
+- STT: local `sherpa-onnx` (Whisper weights on disk)
+- VAD: local `silero_vad.onnx`
+- TTS: local VITS or a local Python bridge
+- LLM: an OpenAI-compatible server on `127.0.0.1`
 
-Tek dış bağlantı **model indirme**dir (`github.com/k2-fsa/sherpa-onnx`), o da
-yalnızca `scripts/download-models.sh` elle çalıştırıldığında olur.
+The only outbound connection is **model download**
+(`github.com/k2-fsa/sherpa-onnx`), and that happens only when
+`scripts/download-models.sh` is run manually.
 
-### 2. Kontrol sunucusu yalnızca yerel
+### 2. The control server is local only
 
 ```ts
 // agent/src/control-server.ts:30
 export const CONTROL_HOST = '127.0.0.1';
 ```
 
-Sabittir; ortam değişkeniyle `0.0.0.0`'a **açılamaz**. Portu değiştirmek
-mümkündür (`DIJI_CONTROL_PORT`), ana makineyi değiştirmek mümkün değildir.
+It is a constant; an environment variable **cannot** open it on `0.0.0.0`. The
+port can be changed (`DIJI_CONTROL_PORT`); the host cannot.
 
-### 3. Token'lar şifreli saklanır
+### 3. Tokens are stored encrypted
 
-MCP sunucuları OAuth2 token'larını `ENCRYPTION_PASSWORD` ile şifreleyerek
-`TOKEN_STORAGE_PATH` (varsayılan `./tokens`) altına yazar; dizin `.gitignore`
-ile dışlanmıştır.
+The MCP servers encrypt OAuth2 tokens with `ENCRYPTION_PASSWORD` and write them
+under `TOKEN_STORAGE_PATH` (default `./tokens`); that directory is excluded by
+`.gitignore`.
 
-### 4. Silme varsayılan olarak kapalı
+### 4. Delete is off by default
 
 ```ts
 // shared/src/config/default.ts:118
 permissionGate: { read: true, write: true, delete: false }
 ```
 
-`delete` yalnızca `DIJI_ALLOW_DELETE=true` ile açılır ve açıldığında bile her
-çağrıda ses onayı istenir.
+`delete` is enabled only with `DIJI_ALLOW_DELETE=true`, and even then every call
+still requires voice confirmation.
 
-### 5. Env dosyası 0600
+### 5. Env file is 0600
 
-`~/.config/diji/env` `0600` kipinde yazılır, dizin `0700`'dür. Yazma atomiktir
-(`temp` + `rename`), yarım dosya oluşmaz
+`~/.config/diji/env` is written with mode `0600` and the directory is `0700`. The
+write is atomic (`temp` + `rename`), so a half-written file cannot appear
 ([`env-prefs.ts`](agent/src/env-prefs.ts)).
 
 ---
 
-## İzin kapısı
+## Permission gate
 
-Her MCP çağrısı [`PermissionGate.evaluate()`](shared/src/permission-gate.ts)
-üzerinden geçer. Üç izin sınıfı vardır:
+Every MCP call passes through
+[`PermissionGate.evaluate()`](shared/src/permission-gate.ts). There are three
+permission classes:
 
-| Sınıf | Davranış |
+| Class | Behaviour |
 |---|---|
-| `read` | Hemen yürütülür (arama, listeleme, okuma) |
-| `write` | **Ses onayı** gerekir. Onay yoksa çağrı yapılmaz. |
-| `delete` | Varsayılan olarak **engellenir**. `DIJI_ALLOW_DELETE=true` ise ses onayıyla yürütülür. Takvim silme özel durumdur: her zaman sıkı onay. |
+| `read` | Executed immediately (search, list, read) |
+| `write` | **Voice confirmation** required. Without approval the call is not made. |
+| `delete` | **Blocked** by default. With `DIJI_ALLOW_DELETE=true` it runs after voice confirmation. Calendar deletion is a special case: always strict confirmation. |
 
-### Onay akışı
+### Confirmation flow
 
 ```
-1. LLM bir araç çağırmak ister
+1. The LLM wants to call a tool
 2. MCPClient.callTool() → PermissionGate.evaluate()
-3. write/delete ise: randomBytes(32) token üretilir, 5 dk TTL
-4. Telemetriye `pendingConfirmation` yazılır → SSE `confirmation` olayı
-5. Asistan soruyu SESLENDİRİR ("Şu e-postayı göndermemi onaylıyor musunuz?")
-6. Kullanıcı arayüzden veya sesle yanıtlar → POST /confirm { confirmed }
-7. Token doğrulanır (tek kullanımlık), süresi dolmuşsa reddedilir
-8. Onaylandıysa araç çağrılır; reddedildiyse LLM'e "kullanıcı reddetti" döner
+3. For write/delete: a randomBytes(32) token is generated, 5 min TTL
+4. `pendingConfirmation` is written to telemetry → SSE `confirmation` event
+5. The assistant SPEAKS the question ("Do you approve sending this email?")
+6. The user answers from the UI or by voice → POST /confirm { confirmed }
+7. The token is validated (single use); if expired it is rejected
+8. If approved the tool runs; if rejected the LLM is told "the user declined"
 ```
 
-### Yarış durumu — düzeltildi
+### The race condition — fixed
 
-Onay kaydı TTS'ten **önce** yayınlanıyor (`expiresAt: null`) ama bekleyen
-promise seslendirme bittikten **sonra** kuruluyordu. Kullanıcı diyaloğu erken
-görüp hemen onaylarsa istek `applied:false` ile sessizce kayboluyordu —
-yani **kullanıcı onayladığını sanırken işlem yapılmıyordu**.
+The confirmation record is published **before** TTS (`expiresAt: null`) but the
+pending promise used to be installed **after** speech finished. If the user saw
+the dialog early and approved immediately, the request silently vanished with
+`applied:false` — meaning **the user thought they had approved while nothing
+happened**.
 
-Çözüm: `/confirm` en fazla 5 sn boyunca 100 ms aralıklarla yeniden dener
+Fix: `/confirm` retries at 100 ms intervals for up to 5 s
 ([`control-server.ts:366`](agent/src/control-server.ts)).
 
-### Token özellikleri
+### Token properties
 
-| Özellik | Değer |
+| Property | Value |
 |---|---|
-| Üretim | `randomBytes(32).toString('hex')` → 256 bit |
-| TTL | 5 dakika (`TOKEN_TTL_MS`) |
-| Kullanım | Tek kullanımlık — `confirm()` sildikten sonra döner |
-| Doğrulama | Sabit zamanlı değil (bkz. [bilinen sınırlar](#bilinen-sınırlar)) |
+| Generation | `randomBytes(32).toString('hex')` → 256 bit |
+| TTL | 5 minutes (`TOKEN_TTL_MS`) |
+| Usage | Single use — `confirm()` deletes it before returning |
+| Comparison | Not constant-time (see [known limits](#known-limits)) |
 
-### Onay kapısının sınırı — önemli
+### The limit of the permission gate — important
 
 > [!WARNING]
-> Onay kapısı, **LLM'i** kötü niyetli eylemlerden korur, **kullanıcıyı** LLM'in
-> yanlış anlamasından korumaz. LLM, kullanıcının niyetini yanlış yorumlayıp
-> gereksiz bir `write` çağrısı başlatabilir. Onay diyaloğunu **okuyun**;
-> "Onayla"ya refleksle basmayın.
+> The gate protects the **LLM** from malicious actions; it does not protect the
+> **user** from the LLM misunderstanding them. The LLM can misinterpret the
+> user's intent and start an unnecessary `write` call. **Read** the confirmation
+> dialog; do not press "Approve" reflexively.
 
 ---
 
-## Kontrol sunucusu
+## Control server
 
-| Özellik | Durum | Not |
+| Property | Status | Note |
 |---|---|---|
-| Ana makine | `127.0.0.1` sabit | Ağdan erişilemez |
-| Kimlik doğrulama | **Yok** | Yerel süreçler güvenilir kabul edilir |
-| CORS | `*` | Yerel olduğu için zararsız; yine de herhangi bir yerel web sayfası teoride istek atabilir |
-| Gövde sınırı | 1 MB | `readBody` fazlasını keser |
-| `/inject` | Ses enjeksiyonu | 1 MB sınırı ~32 sn ses demektir |
+| Host | `127.0.0.1`, constant | Unreachable from the network |
+| Authentication | **None** | Local processes are considered trusted |
+| CORS | `*` | Harmless because it is local; still, any local web page could in theory send a request |
+| Body limit | 1 MB | `readBody` truncates beyond that |
+| `/inject` | Audio injection | The 1 MB limit is roughly 32 s of audio |
 
-### Neden kimlik doğrulama yok
+### Why there is no authentication
 
-Kontrol sunucusu **yerel bir IPC kanalı** gibi çalışır. Kimlik doğrulama eklemek
-her istekte bir sır paylaşımı gerektirir ve bu sır yine yerel dosyada durur —
-kazanç sağlamaz. Bunun yerine yüzey daraltıldı:
+The control server behaves like a **local IPC channel**. Adding authentication
+would require sharing a secret on every request, and that secret would still live
+in a local file — no real gain. Instead the surface was narrowed:
 
-- Ana makine `127.0.0.1`'e sabit
-- Yalnızca gerekli 11 uç nokta
-- Erişim yalnızca Electron köprüsü ve `scripts/*.js` üzerinden
+- The host is pinned to `127.0.0.1`
+- Only the 11 required endpoints
+- Access only through the Electron bridge and `scripts/*.js`
 
 > [!CAUTION]
-> `CONTROL_HOST` sabitini değiştirmeyin. Ağa açılan bir kontrol sunucusu,
-> kimlik doğrulama olmadığı için **herkesin mikrofonunuzu açıp MCP
-> araçlarınızı çalıştırabildiği** bir arayüz olur.
+> Do not change the `CONTROL_HOST` constant. A control server exposed to the
+> network would, with no authentication, become an interface where **anyone can
+> open your microphone and run your MCP tools**.
 
 ---
 
-## Electron izolasyonu
+## Electron isolation
 
 ```ts
 // ui/electron/main.ts:165
@@ -196,33 +200,33 @@ webPreferences: {
 }
 ```
 
-| Ayar | Değer | Sonuç |
+| Setting | Value | Effect |
 |---|---|---|
-| `nodeIntegration` | `false` | Renderer `require`/`process` göremez |
-| `contextIsolation` | `true` | Preload ve sayfa bağlamı ayrı |
-| `preload` | Dar `window.diji` yüzeyi | Yalnızca 10 metod, ham IPC değil |
+| `nodeIntegration` | `false` | The renderer cannot see `require`/`process` |
+| `contextIsolation` | `true` | Preload and page contexts are separated |
+| `preload` | Narrow `window.diji` surface | Only 10 methods, not raw IPC |
 
-Renderer'a açılan yüzey [`ui-app/src/types/diji.d.ts`](ui-app/src/types/diji.d.ts)
-içinde tanımlıdır: `getState`, `listen`, `ask`, `setTts`, `confirm`, `bargeIn`,
-`getModels`, `selectModel`, `onTelemetry`, `onConnection`. Ham `ipcRenderer`
-veya dosya sistemi erişimi **verilmez**.
+The surface exposed to the renderer is defined in
+[`ui-app/src/types/diji.d.ts`](ui-app/src/types/diji.d.ts): `getState`, `listen`,
+`ask`, `setTts`, `confirm`, `bargeIn`, `getModels`, `selectModel`, `onTelemetry`,
+`onConnection`. Raw `ipcRenderer` or filesystem access is **not** granted.
 
 ### Sandbox
 
-Varsayılan: sandbox **açık**. Yalnızca `DIJI_ELECTRON_SANDBOX=0` ile kapatılır.
+Default: sandbox **on**. It is disabled only with `DIJI_ELECTRON_SANDBOX=0`.
 
 > [!WARNING]
-> `DIJI_ELECTRON_SANDBOX=0` yalnızca yerel kullanıcı ad alanı kısıtı nedeniyle
-> Chromium hiç açılamadığında kullanılmalıdır. Kapalıyken renderer daha geniş
-> yetkiye sahiptir.
+> `DIJI_ELECTRON_SANDBOX=0` should be used only when Chromium cannot start at all
+> due to a local user-namespace restriction. While disabled the renderer has
+> broader privileges.
 
 ---
 
-## Sır yönetimi
+## Secret management
 
-### Depoya giren ve girmeyen
+### What does and does not enter the repository
 
-`.gitignore` şunları **dışlar**:
+`.gitignore` **excludes**:
 
 ```gitignore
 *.env
@@ -236,61 +240,63 @@ oauth-tokens/
 tokens/
 ```
 
-Yayın öncesi tarama yapıldı: `sk-`, `ghp_`, `xox*`, `AIza`, `ntn_`, özel anahtar
-blokları arandı → **kaynak kodda sıfır eşleşme**. Depoda `.env`, `.pem`,
-`credentials*.json`, `token*.json` dosyası **yok**.
+A pre-publication scan was run: `sk-`, `ghp_`, `xox*`, `AIza`, `ntn_` and
+private-key blocks were searched for → **zero matches in the source**. The
+repository contains **no** `.env`, `.pem`, `credentials*.json` or `token*.json`
+files.
 
-### Ortam değişkeni ile sır verme
+### Supplying secrets via environment variables
 
 ```bash
-# Doğru: süreç ortamı (kabuk geçmişine dikkat)
+# Correct: process environment (mind your shell history)
 ENCRYPTION_PASSWORD='…' node agent/dist/index.js
 
-# Yanlış: env dosyasına düz metin yazmak (0600 olsa da diskte durur)
+# Wrong: writing plaintext into the env file (it still sits on disk even at 0600)
 ```
 
-`~/.config/diji/env` **sırlar için tasarlanmadı** — model seçimi gibi kalıcı
-ayarlar içindir. OAuth client secret'ları ve `ENCRYPTION_PASSWORD` için
-systemd `EnvironmentFile=` (0600) veya bir sır yöneticisi kullanın.
+`~/.config/diji/env` is **not designed for secrets** — it holds persistent
+settings such as model selection. For OAuth client secrets and
+`ENCRYPTION_PASSWORD`, use a systemd `EnvironmentFile=` (0600) or a secret
+manager.
 
-### Varsayılan parola uyarısı
+### Default password warning
 
-`ENCRYPTION_PASSWORD` varsayılanı `diji-default-key`'dir. Bu yalnızca
-geliştirme kolaylığı içindir.
+The default for `ENCRYPTION_PASSWORD` is `diji-default-key`. That exists purely
+for development convenience.
 
 > [!CAUTION]
-> Gerçek OAuth token'ı saklıyorsanız `ENCRYPTION_PASSWORD`'ü **mutlaka**
-> değiştirin. Varsayılan parolayla şifrelenmiş token, dosyayı ele geçiren
-> herkes tarafından çözülebilir.
+> If you store real OAuth tokens you **must** change `ENCRYPTION_PASSWORD`. A
+> token encrypted with the default password can be decrypted by anyone who gets
+> the file.
 
-### LLM API anahtarı
+### LLM API key
 
-`DIJI_LLM_API_KEY` varsayılanı `sk-local`'dir ve yerel sunucu genelde
-doğrulama yapmaz. Gerçek bir anahtar kullanıyorsanız env dosyasına değil süreç
-ortamına verin.
+`DIJI_LLM_API_KEY` defaults to `sk-local` and the local server usually performs
+no validation. If you use a real key, supply it through the process environment,
+not the env file.
 
 ---
 
-## Ses gizliliği
+## Audio privacy
 
-| Konu | Durum |
+| Question | Status |
 |---|---|
-| Ham ses diske yazılır mı? | **Hayır.** Yalnızca bellekte işlenir. |
-| Transkript diske yazılır mı? | **Hayır.** Yalnızca bellekte (`CONVERSATION_LIMIT` = 50 mesaj). |
-| Loglar ses içerir mi? | **Hayır.** Yalnızca süreler, seviyeler ve transkript uzunluğu. |
-| `/inject` gövdesi saklanır mı? | **Hayır.** İşlenir, atılır. |
-| Arayüz geçmişi | Tarayıcı `localStorage`'ında; sohbet metni orada durur |
+| Is raw audio written to disk? | **No.** Processed in memory only. |
+| Is the transcript written to disk? | **No.** In memory only (`CONVERSATION_LIMIT` = 50 messages). |
+| Do logs contain audio? | **No.** Only durations, levels and transcript length. |
+| Is the `/inject` body retained? | **No.** Processed and discarded. |
+| UI history | In the browser's `localStorage`; chat text lives there |
 
 > [!NOTE]
-> Arayüz sohbet geçmişini `localStorage`'da tutar. Paylaşılan bir makinede
-> çalışıyorsanız bu dizini temizleyin.
+> The UI keeps chat history in `localStorage`. If you work on a shared machine,
+> clear that directory.
 
-### Mikrofon sahipliği
+### Microphone ownership
 
-Ajan mikrofonu `arecord` ile `default` (PipeWire) üzerinden okur. Ham donanım
-cihazına (`plughw:...`) geçmek aygıtı **tek başına ele geçirir** ve diğer tüm
-uygulamaların mikrofonunu keser. Bu yüzden Electron köprüsü cihazı açıkça
-`default`'a sabitler:
+The agent reads the microphone with `arecord` through `default` (PipeWire).
+Switching to a raw hardware device (`plughw:...`) **takes exclusive ownership**
+of the device and cuts the microphone for every other application. That is why
+the Electron bridge pins the device explicitly to `default`:
 
 ```ts
 // ui/electron/agent-bridge.ts:204
@@ -299,75 +305,79 @@ DIJI_AUDIO_INPUT_DEVICE: process.env.DIJI_AUDIO_INPUT_DEVICE || 'default',
 
 ---
 
-## Bilinen sınırlar
+## Known limits
 
-Bu liste **dürüstlük** içindir; bilinen zayıflıklar gizlenmez.
+This list exists for **honesty**; known weaknesses are not hidden.
 
-| Sınır | Etki | Azaltma |
+| Limit | Effect | Mitigation |
 |---|---|---|
-| Kontrol sunucusunda kimlik doğrulama yok | Aynı makinedeki herhangi bir süreç ajanı yönetebilir | Yerel ana makineye sabit; yüzey dar |
-| Onay token'ı sabit zamanlı karşılaştırılmıyor | Teorik zamanlama saldırısı | Token 256 bit rastgele ve 5 dk TTL; pratikte sömürülemez |
-| CORS `*` | Yerel bir web sayfası `fetch` atabilir | Tarayıcılar `127.0.0.1`'e mixed-content kısıtı uygular; yine de tam garanti değil |
-| `/inject` ses enjeksiyonuna açık | Yerel bir süreç sahte konuşma enjekte edebilir | Teşhis uç noktası; üretimde gerekmiyorsa güvenlik duvarı kuralı ekleyin |
-| Env dosyası düz metin | Model seçimi ve yol bilgisi okunabilir | `0600`; sır koymayın |
-| OAuth token şifrelemesi tek parolaya bağlı | Parola zayıfsa token çözülebilir | Güçlü `ENCRYPTION_PASSWORD` |
-| LLM çıktısı denetlenmez | Model yanlış/zararlı içerik üretebilir | `write`/`delete` onay kapısı; çıktıyı okuyun |
-| Ses dosyası bütünlüğü doğrulanmaz | Değiştirilmiş model yüklenebilir | Model dizinini `0700` tutun, indirmeleri resmî kaynaktan yapın |
-| `ELECTRON_RUN_AS_NODE` | Kabukta tanımlıysa Electron Node gibi davranır | `env -u ELECTRON_RUN_AS_NODE` ile başlatın |
+| No authentication on the control server | Any process on the same machine can drive the agent | Pinned to the local host; narrow surface |
+| Confirmation token is not compared in constant time | Theoretical timing attack | The token is 256-bit random with a 5 min TTL; not exploitable in practice |
+| CORS `*` | A local web page can issue `fetch` | Browsers apply mixed-content restrictions to `127.0.0.1`; still not a full guarantee |
+| `/inject` is open to audio injection | A local process can inject fake speech | Diagnostics endpoint; add a firewall rule if you do not need it in production |
+| Env file is plaintext | Model selection and path information are readable | `0600`; do not put secrets in it |
+| OAuth token encryption depends on a single passphrase | A weak passphrase means the token can be decrypted | Use a strong `ENCRYPTION_PASSWORD` |
+| LLM output is not moderated | The model can produce wrong or harmful content | The `write`/`delete` permission gate; read the output |
+| Audio file integrity is not verified | A tampered model could be loaded | Keep the model directory `0700`, download only from the official source |
+| `ELECTRON_RUN_AS_NODE` | If defined in the shell, Electron behaves like Node | Launch with `env -u ELECTRON_RUN_AS_NODE` |
 
 ---
 
-## Sertleştirme kontrol listesi
+## Hardening checklist
 
-Üretimde/çok kullanıcılı makinede çalıştırmadan önce:
+Before running in production or on a multi-user machine:
 
-- [ ] `ENCRYPTION_PASSWORD`'ü varsayılandan değiştir (`diji-default-key` değil)
-- [ ] OAuth client secret'larını env dosyasına değil süreç ortamına ver
-- [ ] `~/.config/diji` → `0700`, `~/.config/diji/env` → `0600` olduğunu doğrula
-- [ ] `~/.diji/models` dizinini yalnızca sahibine okut (`chmod 700`)
-- [ ] `DIJI_ALLOW_DELETE` kapalı bırak (varsayılan)
-- [ ] Model dosyalarını yalnızca `github.com/k2-fsa/sherpa-onnx` üzerinden indir
-- [ ] Aynı makinede güvenilmeyen kullanıcı/süreç yoksa kontrol sunucusu riski kabul et
-- [ ] Arayüz `localStorage` geçmişini paylaşılan makinede temizle
-- [ ] `scripts/*.js` yardımcılarını üretimde çalıştırma (`/inject`, `cdp-eval`)
+- [ ] Change `ENCRYPTION_PASSWORD` from the default (not `diji-default-key`)
+- [ ] Supply OAuth client secrets through the process environment, not the env file
+- [ ] Verify `~/.config/diji` → `0700` and `~/.config/diji/env` → `0600`
+- [ ] Make `~/.diji/models` owner-readable only (`chmod 700`)
+- [ ] Leave `DIJI_ALLOW_DELETE` off (the default)
+- [ ] Download model files only from `github.com/k2-fsa/sherpa-onnx`
+- [ ] Accept the control server risk only if there are no untrusted users/processes on the same machine
+- [ ] Clear the UI `localStorage` history on a shared machine
+- [ ] Do not run the `scripts/*.js` helpers in production (`/inject`, `cdp-eval`)
 
-Doğrulama komutları:
+Verification commands:
 
 ```bash
 stat -c '%a %n' ~/.config/diji ~/.config/diji/env ~/.diji/models
-ss -ltnp 2>/dev/null | grep 8899          # 127.0.0.1:8899 olmalı, 0.0.0.0 değil
-grep -rn 'ENCRYPTION_PASSWORD' ~/.config/diji/env 2>/dev/null  # boş olmalı
+ss -ltnp 2>/dev/null | grep 8899          # should be 127.0.0.1:8899, not 0.0.0.0
+grep -rn 'ENCRYPTION_PASSWORD' ~/.config/diji/env 2>/dev/null  # should be empty
 ```
 
 ---
 
-## Güvenlik açığı bildirimi
+## Reporting a vulnerability
 
-Bu proje kişisel/kurumsal bir yerel asistan uygulamasıdır ve bir güvenlik
-ekibi yoktur. Yine de bir açık bulduysanız:
+This project is a personal/business local assistant application and has no
+security team. If you do find a vulnerability:
 
-**Yapın:**
+**Do:**
 
-1. Depoda **özel** bir güvenlik raporu açın (GitHub → Security → Report a
-   vulnerability), veya
-2. Doğrudan proje sahibine ulaşın.
+1. Open a **private** security report in the repository (GitHub → Security →
+   Report a vulnerability), or
+2. Contact the project owner directly.
 
-Rapora şunları ekleyin: etkilenen sürüm/commit, yeniden üretme adımları,
-beklenen ve gerçekleşen davranış, olası etki.
+Include: the affected version/commit, reproduction steps, expected vs. actual
+behaviour, and the potential impact.
 
-**Yapmayın:**
+**Do not:**
 
-- Açığı herkese açık bir issue olarak paylaşmayın.
-- Gerçek kişisel veri (konuşma kaydı, token, e-posta) eklemeyin.
+- Disclose the vulnerability in a public issue.
+- Include real personal data (voice recordings, tokens, email).
 
-Yanıt süresi garanti edilmez; ancak geçerli raporlar öncelikli ele alınır.
+Response time is not guaranteed, but valid reports are handled with priority.
 
 ---
 
-## İlgili belgeler
+## Related documents
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — mimari, izin akışı ([English](docs/en/ARCHITECTURE.md))
-- [docs/API.md](docs/API.md) — kontrol sunucusu uç noktaları ([English](docs/en/API.md))
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — sır içeren değişkenler ([English](docs/en/CONFIGURATION.md))
-- [docs/MODELS.md](docs/MODELS.md) — üçüncü taraf model lisansları ([English](docs/en/MODELS.md))
-- [CONTRIBUTING.md](CONTRIBUTING.md) — katkı süreci ([English](CONTRIBUTING.en.md))
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, permission flow
+- [docs/API.md](docs/API.md) — control server endpoints
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — variables that carry secrets
+- [docs/MODELS.md](docs/MODELS.md) — third-party model licences
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution process
+
+Turkish originals: [`SECURITY.tr.md`](SECURITY.tr.md), [`docs/ARCHITECTURE.tr.md`](docs/ARCHITECTURE.tr.md),
+[`docs/API.tr.md`](docs/API.tr.md), [`docs/CONFIGURATION.tr.md`](docs/CONFIGURATION.tr.md),
+[`docs/MODELS.tr.md`](docs/MODELS.tr.md), [`CONTRIBUTING.tr.md`](CONTRIBUTING.tr.md).

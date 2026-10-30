@@ -1,108 +1,108 @@
-# Katkı Rehberi
+# Contributing Guide
 
-**Türkçe** · [🇬🇧 English](CONTRIBUTING.en.md)
+**English** · [Türkçe](CONTRIBUTING.tr.md)
 
-Diji'ye katkı için teşekkürler. Bu belge, kod tabanının **gerçek** kurallarını
-anlatır — idealize edilmiş bir stil rehberi değil, mevcut kodun uyduğu
-sözleşmeler.
-
----
-
-## İçindekiler
-
-- [Hızlı başlangıç](#hızlı-başlangıç)
-- [Proje yapısı](#proje-yapısı)
-- [Derleme — proje referansları](#derleme--proje-referansları)
-- [Test](#test)
-- [Kod kuralları](#kod-kuralları)
-- [Değişmezler (bozulmaması gerekenler)](#değişmezler-bozulmaması-gerekenler)
-- [Hata ayıklama araçları](#hata-ayıklama-araçları)
-- [Commit ve PR](#commit-ve-pr)
-- [Dokümantasyon](#dokümantasyon)
+Thanks for contributing to Diji. This document describes the **real** rules of
+the codebase — not an idealised style guide, but the contracts the existing code
+already follows.
 
 ---
 
-## Hızlı başlangıç
+## Table of contents
+
+- [Quick start](#quick-start)
+- [Project structure](#project-structure)
+- [Build — project references](#build--project-references)
+- [Testing](#testing)
+- [Code rules](#code-rules)
+- [Invariants (do not break these)](#invariants-do-not-break-these)
+- [Debugging tools](#debugging-tools)
+- [Commits and PRs](#commits-and-prs)
+- [Documentation](#documentation)
+
+---
+
+## Quick start
 
 ```bash
-# 1. Gereksinimler: Node >= 20, npm 10, arecord/aplay (alsa-utils), ffmpeg
+# 1. Requirements: Node >= 20, npm 10, arecord/aplay (alsa-utils), ffmpeg
 node --version            # v20+
 arecord --version
 ffmpeg -version | head -1
 
-# 2. Bağımlılıklar (postinstall `shared` paketini derler)
+# 2. Dependencies (postinstall builds the `shared` package)
 npm install
 
-# 3. Modeller (VAD + Whisper + VITS, ~1,5 GB)
+# 3. Models (VAD + Whisper + VITS, ~1.5 GB)
 ./scripts/download-models.sh all
 
-# 4. Derle
+# 4. Build
 npm run build
 
-# 5. Yerel LLM sunucusunun ayakta olduğunu doğrula
+# 5. Verify the local LLM server is up
 curl -s http://127.0.0.1:8000/v1/models | head -c 200
 
-# 6. Çalıştır
-npm start                 # sesli mod
-npm run start:text        # mikrofonsuz
+# 6. Run
+npm start                 # voice mode
+npm run start:text        # microphone-free
 ```
 
-Masaüstü arayüzü için `ui-app/` dizinine bakın: kendi `package.json`'ı vardır ve
-kök workspace'e **dahil değildir**.
+For the desktop UI see the `ui-app/` directory: it has its own `package.json` and
+is **not** part of the root workspace.
 
 ---
 
-## Proje yapısı
+## Project structure
 
-| Dizin | Sorumluluk | Dil |
+| Directory | Responsibility | Language |
 |---|---|---|
-| `shared/` | Tipler, varsayılan yapılandırma, izin kapısı, logger. **Herkesin bağımlı olduğu temel.** | TS |
-| `agent/` | Ses boru hattı: mikrofondan hoparlöre. Kontrol sunucusu, telemetri, model kataloğu. | TS |
-| `mcp_servers/` | Altı MCP sunucusu (gmail, calendar, drive, notion, slack, chrome). stdio alt süreçler. | TS |
-| `ui-app/` | TanStack Start + Electron masaüstü arayüzü. Bağımsız derleme. | TS/TSX |
-| `scripts/` | İndirme, teşhis, E2E doğrulama betikleri. | JS/Py/sh |
-| `docs/` | Mimari, API, yapılandırma, modeller. | MD |
-| `ui/` | **Arşiv** — eski Next.js arayüzü. Yeni geliştirme `ui-app/` içinde. | TS |
+| `shared/` | Types, default configuration, permission gate, logger. **The foundation everything depends on.** | TS |
+| `agent/` | Audio pipeline: microphone to speaker. Control server, telemetry, model catalog. | TS |
+| `mcp_servers/` | Six MCP servers (gmail, calendar, drive, notion, slack, chrome). stdio child processes. | TS |
+| `ui-app/` | TanStack Start + Electron desktop UI. Independent build. | TS/TSX |
+| `scripts/` | Download, diagnostics, E2E verification scripts. | JS/Py/sh |
+| `docs/` | Architecture, API, configuration, models. | MD |
+| `ui/` | **Archive** — the old Next.js UI. New development happens in `ui-app/`. | TS |
 
-### Katman bağımlılık kuralı
+### Layer dependency rule
 
 ```
-shared  ←  agent  ←  (hiçbir şey)
+shared  ←  agent  ←  (nothing)
 shared  ←  mcp_servers
-ui-app  →  HTTP/SSE  →  agent     (kod bağımlılığı YOK, yalnızca sözleşme)
+ui-app  →  HTTP/SSE  →  agent     (NO code dependency, contract only)
 ```
 
 > [!IMPORTANT]
-> `shared` **hiçbir** çalışma alanına bağımlı olamaz. `agent` `mcp_servers`'a
-> kod olarak bağımlı olamaz (yalnızca süreç olarak başlatır). `ui-app` ajan
-> kodunu **import etmez** — yalnızca `window.diji` köprüsünü kullanır.
+> `shared` **cannot** depend on any workspace. `agent` cannot depend on
+> `mcp_servers` as code (it only starts it as a process). `ui-app` does **not
+> import** agent code — it only uses the `window.diji` bridge.
 
 ---
 
-## Derleme — proje referansları
+## Build — project references
 
-Kök [`tsconfig.json`](tsconfig.json) TypeScript **proje referansları**
-kullanır. `composite: true` olduğu için sıra önemlidir:
+The root [`tsconfig.json`](tsconfig.json) uses TypeScript **project references**.
+Because `composite: true` is set, order matters:
 
 ```
 shared → agent / mcp_servers/*
 ```
 
-### Tek komut
+### Single command
 
 ```bash
-npx tsc -b                    # tüm referansları sırayla derler
-npx tsc -b --clean            # build info + çıktıları temizler
+npx tsc -b                    # builds all references in order
+npx tsc -b --clean            # clears build info + outputs
 ```
 
-### Tek paket
+### Single package
 
 ```bash
-npx tsc -b shared             # agent'tan ÖNCE
+npx tsc -b shared             # BEFORE agent
 npx tsc -b agent
 ```
 
-### Tip denetimi (çıktı üretmeden)
+### Type checking (no output)
 
 ```bash
 npx tsc --noEmit -p agent/tsconfig.json
@@ -110,132 +110,133 @@ npx tsc --noEmit -p ui-app/tsconfig.json
 ```
 
 > [!WARNING]
-> `shared` derlenmeden `agent` derlerse `@diji/shared` çözümlenemez ve
-> **yüzlerce** sahte hata görürsünüz. `npx tsc -b` her zaman doğru sırayı
-> kullanır; tek tek `tsc -p` çalıştırmayın.
+> If `agent` builds before `shared` is built, `@diji/shared` cannot be resolved
+> and you will see **hundreds** of spurious errors. `npx tsc -b` always uses the
+> correct order; do not run `tsc -p` on individual packages.
 
-### `.tsbuildinfo` uyarısı
+### `.tsbuildinfo` warning
 
-Depoda `*.tsbuildinfo` dosyaları **ignore edilir**. Bayatlamış build info
-"hiçbir şey değişmemiş" gibi görünüp artımlı derlemeyi atlatabilir:
+`*.tsbuildinfo` files are **ignored** in the repository. Stale build info can
+make it look like "nothing changed" and skip incremental compilation:
 
 ```bash
-npx tsc -b --clean && npx tsc -b    # şüphelendiğinizde
+npx tsc -b --clean && npx tsc -b    # when in doubt
 ```
 
 ---
 
-## Test
+## Testing
 
-### Birim testleri (Jest)
+### Unit tests (Jest)
 
 ```bash
 npm run test:agent            # agent/src/__tests__/*.test.ts
-npx jest                      # kök config → aynı proje
+npx jest                      # root config → same project
 npx jest --watch
-npx jest -t 'permission'      # tek test
+npx jest -t 'permission'      # a single test
 ```
 
-Test dosyaları `agent/src/__tests__/` altında, `*.test.ts` deseniyle. Kök
-[`jest.config.js`](jest.config.js) `projects` tanımıyla çalışma alanını
-bağlar; bu dosya olmadan Jest Babel varsayılanına düşer ve TS sözdiziminde
-`Missing semicolon` hatası verir.
+Test files live in `agent/src/__tests__/` with the `*.test.ts` pattern. The root
+[`jest.config.js`](jest.config.js) wires up the workspace via its `projects`
+definition; without that file Jest falls back to Babel defaults and fails on TS
+syntax with `Missing semicolon`.
 
-Mevcut kapsam:
+Current coverage:
 
-| Dosya | Neyi doğrular |
+| File | What it verifies |
 |---|---|
-| `audio-preprocess.test.ts` | Ön işleme zinciri (DC, high-pass, kırpma, kapı, AGC) |
-| `stt-postprocess.test.ts` | Halüsinasyon ayıklama, sözlük, boşluk düzeltme |
-| `permission.test.ts` | İzin kapısı sınıfları, token TTL, tek kullanımlık |
+| `audio-preprocess.test.ts` | The preprocessing chain (DC, high-pass, trim, gate, AGC) |
+| `stt-postprocess.test.ts` | Hallucination filtering, dictionary, whitespace correction |
+| `permission.test.ts` | Permission-gate classes, token TTL, single use |
 
-### Uçtan uca (gerçek ajan, mock yok)
+### End to end (real agent, no mocks)
 
 ```bash
 npm run build
-npm start &                                     # ajanı ayağa kaldır
-node scripts/smoke-test.js                      # tam hat
-node scripts/smoke-test.js --skip-audio         # ses cihazı olmadan
-node scripts/control-e2e.js                     # tüm uç noktalar
-node scripts/verify-stt-chain.js                # STT ön/son işleme
-node scripts/verify-llm.js                      # LLM bağlantısı
-node scripts/inject-e2e.js test.pcm             # PCM enjeksiyonu
+npm start &                                     # bring the agent up
+node scripts/smoke-test.js                      # full path
+node scripts/smoke-test.js --skip-audio         # without an audio device
+node scripts/control-e2e.js                     # all endpoints
+node scripts/verify-stt-chain.js                # STT pre/post processing
+node scripts/verify-llm.js                      # LLM connectivity
+node scripts/inject-e2e.js test.pcm             # PCM injection
 ```
 
 > [!NOTE]
-> Model dosyası gerektiren kontroller Jest'te **değil**, `scripts/` altındadır.
-> Jest hızlı ve bağımsız kalmalı; 1,5 GB model yükleyen bir test birim testi
-> değildir.
+> Checks that need model files live under `scripts/`, **not** in Jest. Jest
+> should stay fast and self-contained; a test that loads 1.5 GB of models is not
+> a unit test.
 
-### Arayüz doğrulaması (gerçek Electron + CDP)
+### UI verification (real Electron + CDP)
 
 ```bash
-# Electron'u CDP ile başlat
+# Launch Electron with CDP
 env -u ELECTRON_RUN_AS_NODE ./node_modules/.bin/electron \
     ui-app/electron/main.cjs --remote-debugging-port=9333 &
 
-# Sayfayı sorgula
+# Query the page
 CDP_PORT=9333 node scripts/cdp-eval.js "document.querySelectorAll('select').length"
 ```
 
 > [!CAUTION]
-> `ELECTRON_RUN_AS_NODE=1` kabuk ortamınızda tanımlıysa Electron pencere açmaz,
-> Node gibi davranır. `env -u ELECTRON_RUN_AS_NODE` ile başlatın.
+> If `ELECTRON_RUN_AS_NODE=1` is defined in your shell environment, Electron will
+> not open a window and behaves like Node. Launch with
+> `env -u ELECTRON_RUN_AS_NODE`.
 
 > [!CAUTION]
-> Süreç öldürürken `pkill -f "<desen>"` **kullanmayın** — desen kendi kabuğunuzu
-> da eşleştirir ve komutu çalıştıran shell'i öldürür. PID ile öldürün:
+> Do **not** use `pkill -f "<pattern>"` to kill processes — the pattern also
+> matches your own shell and kills the shell running the command. Kill by PID:
 > ```bash
 > kill "$(curl -s http://127.0.0.1:8899/health | jq -r .pid)"
-> pkill -x electron    # -x tam ad eşleşmesi, güvenli
+> pkill -x electron    # -x is exact name matching, safe
 > ```
 
 ---
 
-## Kod kuralları
+## Code rules
 
-### Dil ve yorumlar
+### Language and comments
 
-- Kod tanımlayıcıları **İngilizce** (`getModelCatalog`, `persistModelChoice`).
-- Kullanıcıya görünen metinler **Türkçe** (`"Seçim kalıcı kaydedildi"`).
-- Yorumlar **Türkçe** ve **neden** anlatır, **ne** değil. Mevcut kod tabanı
-  yoğun yorumludur; bu bilinçlidir — çoğu yorum geçmiş bir hatayı belgeliyor
-  ("KUSUR ONARIMI (2026-10-30): … daha önce HİÇ etkili değildi").
+- Code identifiers are **English** (`getModelCatalog`, `persistModelChoice`).
+- User-facing strings are **Turkish** (`"Seçim kalıcı kaydedildi"`).
+- Comments are **Turkish** and explain **why**, not **what**. The existing
+  codebase is heavily commented on purpose — most comments document a past bug
+  ("KUSUR ONARIMI (2026-10-30): … had NEVER had any effect before").
 
 ```ts
-// İYİ — nedeni açıklar, gelecekteki bir geliştirmeyi hatadan korur
+// GOOD — explains the reason, protects a future change from the same bug
 /*
- * KUSUR ONARIMI: `DIJI_STT_MODEL_PREFIX` daha önce HİÇ etkili değildi.
- * `stt.ts` önceliği `modelPriority ?? modelPrefix` sırasıyla çözer ve
- * `modelPriority` her zaman tanımlı olduğu için ikinci dal hiç çalışmıyordu.
+ * KUSUR ONARIMI: `DIJI_STT_MODEL_PREFIX` had NEVER had any effect before.
+ * `stt.ts` resolves priority as `modelPriority ?? modelPrefix` and because
+ * `modelPriority` was always defined, the second branch never ran.
  */
 
-// KÖTÜ — kodu tekrar eder
-// model prefix'i ayarla
+// BAD — restates the code
+// set the model prefix
 ```
 
-### Günlükleme — `console.*` yasak
+### Logging — `console.*` is forbidden
 
 ```ts
-// İYİ
+// GOOD
 import { logInfo, logWarn, logError, logDebug } from '@diji/shared';
 logInfo('Ajan hazir', { port });
 logError('Ajan baslatilamadi', error as Error, { entry });
 ```
 
-`console.log` yalnızca `scripts/` altındaki yardımcı betiklerde kabul edilir
-(kullanıcıya doğrudan çıktı veriyorlar). `agent/`, `shared/`, `mcp_servers/`
-içinde **yasaktır**: logger `LOG_LEVEL`'ı uygular ve yapılandırılmış bağlam
-taşır.
+`console.log` is acceptable only in helper scripts under `scripts/` (they emit
+direct output for the user). In `agent/`, `shared/` and `mcp_servers/` it is
+**forbidden**: the logger honours `LOG_LEVEL` and carries structured context.
 
-### Hata yakalama
+### Error handling
 
-- Sessiz `catch {}` yalnızca **kasıtlı** yerde: `loadUserEnv()` (dosya yoksa
-  sorun değil), `env-prefs` (asla throw etmez), davranışsız temizlik.
-- Diğer her yerde: yakala, logla, anlamlı bir sonuç döndür.
+- A silent `catch {}` is allowed only in **deliberate** places: `loadUserEnv()`
+  (a missing file is fine), `env-prefs` (never throws), and cleanup with no
+  behaviour.
+- Everywhere else: catch, log, return a meaningful result.
 
 ```ts
-// İYİ — hata yutulmuyor, çağırana taşınıyor
+// GOOD — the error is not swallowed, it is propagated to the caller
 try {
   await p.startListening();
 } catch (error) {
@@ -246,177 +247,180 @@ try {
 }
 ```
 
-### Tip güvenliği
+### Type safety
 
-- `strict: true` — `any` kaçışı yok.
-- `unknown` tercih edilir, sonra daraltılır.
-- Dış veri (HTTP gövdesi, JSON dosyası) **her zaman** doğrulanır:
+- `strict: true` — there is no `any` escape hatch.
+- Prefer `unknown`, then narrow.
+- External data (HTTP body, JSON file) is **always** validated:
 
 ```ts
-// control-server.ts — gövde doğrulaması
+// control-server.ts — body validation
 const kind = String(body.kind ?? '').trim() as 'stt' | 'tts' | 'llm';
 if (kind !== 'stt' && kind !== 'tts' && kind !== 'llm') {
-  send(res, 400, { ok: false, error: 'kind stt|tts|llm olmalı' });
+  send(res, 400, { ok: false, error: 'kind must be stt|tts|llm' });
   return;
 }
 ```
 
-### Biçimlendirme
+### Formatting
 
 ```bash
-npx prettier --write <dosya>
-npx eslint <dosya>
+npx prettier --write <file>
+npx eslint <file>
 ```
 
-`.prettierrc` ve `.eslintrc.js` depo kökündedir; varsayılanları değiştirmeyin.
+`.prettierrc` and `.eslintrc.js` live in the repository root; do not change the
+defaults.
 
 ---
 
-## Değişmezler (bozulmaması gerekenler)
+## Invariants (do not break these)
 
-Bunlar tercih değil, **mimari sözleşmeler**. Değiştirirseniz bir şey sessizce
-kırılır.
+These are not preferences but **architectural contracts**. If you change one,
+something breaks silently.
 
-### 1. Örnekleme oranı 16 kHz mono PCM16
+### 1. Sample rate is 16 kHz mono PCM16
 
-STT, VAD ve `/inject` aynı biçimi bekler. Boru hattında tek bir farklı oran,
-segmentasyonu ve transkripsiyonu bozar.
+STT, VAD and `/inject` all expect the same format. A single differing rate in the
+pipeline breaks segmentation and transcription.
 
-### 2. Mikrofon cihazı `default`
+### 2. The microphone device is `default`
 
-`plughw:...` gibi ham donanım cihazına geçmek aygıtı tek başına ele geçirir ve
-diğer tüm uygulamaların mikrofonunu keser. `agent-bridge.ts` bunu açıkça
-sabitler.
+Switching to a raw hardware device such as `plughw:...` takes exclusive ownership
+and cuts the microphone for every other application. `agent-bridge.ts` pins this
+explicitly.
 
-### 3. Barge-in üçünü birden kapatır
+### 3. Barge-in closes all three
 
-`llm` + `tts` + `playback`. Yalnızca oynatma durdurulursa arayüz `KONUŞUYOR`
-durumunda asılı kalır (`isSpeaking` iki aşamadan türetilir).
+`llm` + `tts` + `playback`. If only playback is stopped, the UI sticks on
+`SPEAKING` (`isSpeaking` is derived from two stages).
 
-### 4. `current` = çalışan motorun kimliği, yapılandırma değil
+### 4. `current` = the running engine's identity, not the configuration value
 
-`drifting-tts` başlatılamazsa motor sessizce `sherpa-vits`'e düşer. `config`'e
-bakmak yanıltıcıdır; `TTSEngine.getModelName()` kullanılır.
+If `drifting-tts` fails to start the engine silently falls back to `sherpa-vits`.
+Reading `config` is misleading; use `TTSEngine.getModelName()`.
 
-### 5. Kalıcılık `~/.config/diji/env`'e, `config.json`'a değil
+### 5. Persistence goes to `~/.config/diji/env`, not `config.json`
 
-`config.json` `process.cwd()`'ye göre çözülür — Electron, terminal ve systemd
-farklı `cwd` verir. Env dosyası mutlak yoldur ve `@diji/shared` değerlendirilmeden
-**önce** okunur (`env-bootstrap.ts` ilk import olmalı).
+`config.json` resolves against `process.cwd()` — Electron, a terminal and systemd
+all give a different `cwd`. The env file is an absolute path and is read
+**before** `@diji/shared` is evaluated (`env-bootstrap.ts` must be the first
+import).
 
-### 6. Geçersiz seçim env'e yazılmaz
+### 6. An invalid selection is never written to the env file
 
-`/models/select` `409` döndüğünde dosyaya hiçbir şey yazılmamalı. Aksi halde
-ajan bir sonraki açılışta kırılır.
+When `/models/select` returns `409`, nothing may be written to the file.
+Otherwise the agent breaks on the next start.
 
-### 7. Aynı modeli yeniden seçmek motoru yeniden başlatmaz
+### 7. Re-selecting the same model does not restart the engine
 
-Ölçüldü: gereksiz yeniden başlatma 8 sn ölü zaman + mikrofonun boşa kesilmesi.
-No-op koruması `selectModel()` içindedir.
+Measured: an unnecessary restart cost 8 s of dead time plus the microphone being
+cut for nothing. The no-op guard lives in `selectModel()`.
 
-### 8. `totalMs` = tur başı → **ilk ses**
+### 8. `totalMs` = turn start → **first audio**
 
-Sentezin bitişi değil. `playbackMs` bundan **sonra** gerçekleşir ve toplama
-katılmaz. Aşama süreleri birbirine girer; toplamları `totalMs` etmez.
+Not the end of synthesis. `playbackMs` happens **after** that and is not part of
+the sum. Stage durations overlap; they do not sum to `totalMs`.
 
-### 9. `turnToken` olmadan ölçüm sıfırlanır
+### 9. Without `turnToken` the measurement is reset
 
-Eşzamanlı turlarda eski bir turun geç biten olayı yeni turun sayaçlarını ezer.
+With concurrent turns, a late-arriving event from an old turn overwrites the
+counters of the new one.
 
-### 10. `App.tsx`/arayüzde `isSpeaking` türetilir
+### 10. `isSpeaking` is derived in the UI
 
-`tts` **veya** `playback` aktifse. Tek bayrağa indirmek barge-in sonrası asılı
-kalmaya yol açar.
+It is true when `tts` **or** `playback` is active. Collapsing it into a single
+flag causes the stuck state after barge-in.
 
-### 11. `ELECTRON_RUN_AS_NODE` ortamdan temizlenmeli
+### 11. `ELECTRON_RUN_AS_NODE` must be cleared from the environment
 
-Bu makinede kabuk ortamında tanımlı; `env -u` ile başlatılmazsa Electron
-pencere açmaz.
+It is defined in the shell environment on this machine; unless launched with
+`env -u`, Electron does not open a window.
 
 ---
 
-## Hata ayıklama araçları
+## Debugging tools
 
-| Araç | Amaç |
+| Tool | Purpose |
 |---|---|
-| `curl -s 127.0.0.1:8899/state \| jq` | Tam anlık durum |
-| `curl -N 127.0.0.1:8899/events` | Canlı SSE akışı |
-| `tail -f /tmp/diji-agent.log` | Ajan stdout/stderr (Electron spawn ederken) |
-| `node scripts/cdp-eval.js "<js>"` | Arayüzü CDP ile sorgula |
-| `scripts/inject-e2e.js` | PCM'i mikrofon gibi besle (mikrofon olmadan test) |
-| `arecord -l` | Mikrofon cihaz listesi |
-| `LOG_LEVEL=debug npm start` | Ayrıntılı günlük |
+| `curl -s 127.0.0.1:8899/state \| jq` | Full instantaneous state |
+| `curl -N 127.0.0.1:8899/events` | Live SSE stream |
+| `tail -f /tmp/diji-agent.log` | Agent stdout/stderr (when Electron spawns it) |
+| `node scripts/cdp-eval.js "<js>"` | Query the UI over CDP |
+| `scripts/inject-e2e.js` | Feed PCM as if from the microphone (test without a mic) |
+| `arecord -l` | List microphone devices |
+| `LOG_LEVEL=debug npm start` | Verbose logging |
 
-### Sık yapılan hatalar
+### Common mistakes
 
-| Hata | Sonuç | Doğrusu |
+| Mistake | Consequence | Correct approach |
 |---|---|---|
-| `pkill -f "agent/dist/index.js"` | **Kendi kabuğunuzu öldürür** | PID ile `kill` |
-| `tsc -p agent` (shared derlenmeden) | Yüzlerce sahte hata | `npx tsc -b` |
-| `console.log` eklemek | `LOG_LEVEL` yok sayılır | `logInfo` vb. |
-| `diji.d.ts` güncellemeden arayüz alanı eklemek | `tsc --noEmit` hatası | Tipi önce ekle |
-| Mock kullanmak | Ses hattı gerçek donanım/örnekleme gerektirir | Gerçek motor + enjeksiyon |
+| `pkill -f "agent/dist/index.js"` | **Kills your own shell** | `kill` by PID |
+| `tsc -p agent` (before shared is built) | Hundreds of spurious errors | `npx tsc -b` |
+| Adding `console.log` | `LOG_LEVEL` is ignored | `logInfo` etc. |
+| Adding a UI field without updating `diji.d.ts` | `tsc --noEmit` failure | Add the type first |
+| Using mocks | The audio path needs real hardware/sampling | Real engines + injection |
 
 ---
 
-## Commit ve PR
+## Commits and PRs
 
-### Commit mesajı
-
-```
-<kapsam>: <kısa emir kipi özet>
-
-<gerekirse gövde: NEDEN, ne değişti değil>
-```
-
-Kapsam örnekleri: `agent`, `shared`, `ui-app`, `mcp`, `docs`, `scripts`,
-`config`. Örnekler:
+### Commit message
 
 ```
-agent: STT ön ek önceliğini düzelt (DIJI_STT_MODEL_PREFIX etkisizdi)
-ui-app: Ayarlar'a model seçimi ekle
-docs: API sözleşmelerini belgele
-config: TTS_VITS_MODEL anahtarını ayır
+<scope>: <short imperative summary>
+
+<optional body: WHY, not what changed>
 ```
 
-### PR kontrol listesi
+Scope examples: `agent`, `shared`, `ui-app`, `mcp`, `docs`, `scripts`, `config`.
+Examples:
 
-- [ ] `npx tsc -b` temiz
-- [ ] `npm run test:agent` yeşil
-- [ ] `node scripts/smoke-test.js --skip-audio` yeşil (dokunulan alan ses ise tam smoke)
-- [ ] Yeni davranış gerçek ajanla doğrulandı (mock değil)
-- [ ] Yeni ortam değişkeni → `docs/CONFIGURATION.md` + `default.ts`'te
-      `process.env` ile okunuyor
-- [ ] Yeni uç nokta/alan → `docs/API.md` + `ui-app/src/types/diji.d.ts`
-- [ ] `console.log` eklenmedi
-- [ ] Gizli bilgi (token, anahtar, kişisel yol) commit edilmedi
-- [ ] Değişmezlerden biri bozulmadı (yukarıdaki 11 madde)
+```
+agent: fix STT prefix priority (DIJI_STT_MODEL_PREFIX had no effect)
+ui-app: add model selection to Settings
+docs: document the API contracts
+config: split out the TTS_VITS_MODEL key
+```
 
-### Kapsam
+### PR checklist
 
-Küçük ve odaklı PR'lar tercih edilir. Bir kusuru düzeltirken **ilgisiz**
-biçimlendirme değişikliği yapmayın — diff okunamaz hale gelir.
+- [ ] `npx tsc -b` is clean
+- [ ] `npm run test:agent` is green
+- [ ] `node scripts/smoke-test.js --skip-audio` is green (full smoke if the touched area is audio)
+- [ ] The new behaviour was verified against the real agent (not mocks)
+- [ ] A new environment variable → documented in `docs/CONFIGURATION.md` and read
+      via `process.env` in `default.ts`
+- [ ] A new endpoint/field → `docs/API.md` + `ui-app/src/types/diji.d.ts`
+- [ ] No `console.log` added
+- [ ] No secrets committed (token, key, personal path)
+- [ ] None of the invariants broken (the 11 items above)
+
+### Scope
+
+Small, focused PRs are preferred. When fixing a bug do not make **unrelated**
+formatting changes — the diff becomes unreadable.
 
 ---
 
-## Dokümantasyon
+## Documentation
 
-Kod değişikliği dokümantasyon gerektiriyorsa aynı PR'da güncelleyin:
+If a code change needs documentation, update it in the same PR:
 
-| Değişiklik | Güncellenecek |
+| Change | Update |
 |---|---|
-| Yeni/biten uç nokta | [`docs/API.md`](docs/API.md) + [`docs/en/API.md`](docs/en/API.md) |
-| Yeni ortam değişkeni | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) + [`docs/en/CONFIGURATION.md`](docs/en/CONFIGURATION.md) |
-| Model/arka uç değişikliği | [`docs/MODELS.md`](docs/MODELS.md) + [`docs/en/MODELS.md`](docs/en/MODELS.md) |
-| Katman/sorumluluk değişikliği | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + [`docs/en/ARCHITECTURE.md`](docs/en/ARCHITECTURE.md) |
-| Güvenlikle ilgili | [`SECURITY.md`](SECURITY.md) + [`SECURITY.en.md`](SECURITY.en.md) |
-| Yeni komut/betik | [`README.md`](README.md) + [`scripts/README.md`](scripts/README.md) |
+| New/changed endpoint | [`docs/API.md`](docs/API.md) (TR: [`docs/API.tr.md`](docs/API.tr.md)) |
+| New environment variable | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) (TR: [`docs/CONFIGURATION.tr.md`](docs/CONFIGURATION.tr.md)) |
+| Model/backend change | [`docs/MODELS.md`](docs/MODELS.md) (TR: [`docs/MODELS.tr.md`](docs/MODELS.tr.md)) |
+| Layer/responsibility change | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (TR: [`docs/ARCHITECTURE.tr.md`](docs/ARCHITECTURE.tr.md)) |
+| Security related | [`SECURITY.md`](SECURITY.md) + [`SECURITY.tr.md`](SECURITY.tr.md) |
+| New command/script | [`README.md`](README.md) + [`scripts/README.md`](scripts/README.md) |
 
-Bağlantılar **göreli** olmalı (`docs/API.md`, `../agent/src/pipeline.ts`) —
-mutlak `file://` veya kişisel yol (`/home/<kullanıcı>/…`) yazmayın.
+Links must be **relative** (`docs/API.md`, `../agent/src/pipeline.ts`) — never
+absolute `file://` or personal paths (`/home/<user>/…`).
 
 ---
 
-## Lisans
+## Licence
 
-Katkılarınız [MIT](LICENSE) lisansı altında kabul edilir.
+Your contributions are accepted under the [MIT](LICENSE) licence.

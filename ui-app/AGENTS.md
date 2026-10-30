@@ -30,4 +30,4 @@
   repository (10 MB file limit) and packaging is done with `--out=/tmp`.
 - The real agent bridge (`electron/agent-bridge.cjs` + `electron/preload.cjs`)
   exposes only the narrow `window.diji` surface; see
-  [`README.en.md`](README.en.md) and [`../docs/en/API.md`](../docs/en/API.md).
+  [`README.md`](README.md) and [`../docs/API.md`](../docs/API.md).
