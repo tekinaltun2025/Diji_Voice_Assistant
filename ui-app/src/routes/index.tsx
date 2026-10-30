@@ -21,10 +21,13 @@ const starter: Conversation = {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Jarvis — Kuantum Cam Sesli Asistan" },
-      { name: "description", content: "Kuantum Cam Jarvis: mikrofon sesine tepki veren akışkan dalga ve yerel sohbet arayüzü." },
-      { property: "og:title", content: "Jarvis — Kuantum Cam Sesli Asistan" },
-      { property: "og:description", content: "Beyaz cam Jarvis arayüzü ve gerçek zamanlı, yerel mikrofon ses görselleştirmesi." },
+      // Bu başlık Electron penceresinin başlık çubuğuna yazılır ve
+      // `BrowserWindow({ title })` değerini sayfa yüklendiğinde EZER.
+      // Bu yüzden uygulama adı burada da DijiAI olmalı.
+      { title: "DijiAI — Türkçe Sesli Asistan" },
+      { name: "description", content: "DijiAI: mikrofon sesine tepki veren akışkan dalga ve yerel sohbet arayüzü." },
+      { property: "og:title", content: "DijiAI — Türkçe Sesli Asistan" },
+      { property: "og:description", content: "DijiAI masaüstü arayüzü ve gerçek zamanlı, yerel mikrofon ses görselleştirmesi." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -366,10 +369,10 @@ function Index() {
 
   return (
     <main className="quantum-desktop">
-      <div className="quantum-caption"><span>02 / KUANTUM CAM</span><span>JARVIS · YEREL SES ARAYÜZÜ</span></div>
+      <div className="quantum-caption"><span>02 / KUANTUM CAM</span><span>DijiAI · YEREL SES ARAYÜZÜ</span></div>
       <section className="quantum-console" aria-label="Jarvis sesli asistan">
         <header className="quantum-header">
-          <div className="quantum-brand"><AudioLines size={25} /><h1>JARVIS</h1><span>Türkçe Sesli Asistan</span></div>
+          <div className="quantum-brand"><AudioLines size={25} /><h1>DijiAI</h1><span>Türkçe Sesli Asistan</span></div>
           <div className="window-controls">
             <button type="button" className="window-button" title="Küçült" aria-label="Pencereyi küçült" onClick={() => void windowAction("minimize")}><Minus size={15} /></button>
             <button type="button" className="window-button" title={maximized ? "Eski boyuta döndür" : "Büyüt"} aria-label={maximized ? "Pencereyi eski boyuta döndür" : "Pencereyi büyüt"} aria-pressed={maximized} onClick={() => void windowAction("maximize")}>{maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
@@ -406,7 +409,7 @@ function Index() {
               <div className="section-heading"><h2>SOHBET</h2><span>{active?.messages.length ?? 0} mesaj</span></div>
               <div className="chat-messages scroll-thin" aria-label="Mesajlar" aria-live="polite">
                 {!active?.messages.length && <div className="empty-chat"><MessageSquare size={30} /><p>henüz mesaj yok — yazın veya konuşun</p></div>}
-                {active?.messages.map(message => <div className={`quantum-message ${message.role === "user" ? "user-message" : ""}`} key={message.id}><span>{message.role === "user" ? "SEN" : "JARVIS"} · {formatTime(message.time)}</span><p>{message.text}</p></div>)}
+                {active?.messages.map(message => <div className={`quantum-message ${message.role === "user" ? "user-message" : ""}`} key={message.id}><span>{message.role === "user" ? "SEN" : "DijiAI"} · {formatTime(message.time)}</span><p>{message.text}</p></div>)}
                 <div ref={messagesEnd} />
               </div>
               {notice && <p className="quantum-notice" role="status">{notice}</p>}

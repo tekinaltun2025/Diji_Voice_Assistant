@@ -13,6 +13,10 @@ const { createAgentBridge } = require("./agent-bridge.cjs");
 const CLIENT_ROOT = path.join(__dirname, "..", "dist", "client");
 const e2e = process.env.JARVIS_E2E === "1";
 
+// Uygulama adı: dock/görev çubuğu ve bildirimlerde bu görünür. `whenReady`
+// öncesinde ayarlanmalı; sonra `app.setName` bazı masaüstlerinde etkisiz kalır.
+app.setName("DijiAI");
+
 // Tek pencere ve tek köprü örneği (IPC kanalları bir kez kaydedilsin diye modül düzeyinde).
 let win = null;
 /** @type {ReturnType<typeof createAgentBridge> | null} */
@@ -43,12 +47,18 @@ function serveClient(url) {
 }
 
 function createWindow() {
+  // Pencere ikonu: Linux'ta `icon` yol ister. Varlık depoda tutuluyor ki
+  // paketlenmemiş çalıştırmada da doğru simge görünsün. Dosya yoksa
+  // Electron varsayılanına düşer (hata vermez).
+  const iconPath = path.join(__dirname, "..", "assets", "dijiai.png");
+
   win = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 460,
     minHeight: 620,
-    title: "Jarvis — Türkçe Sesli Asistan",
+    title: "DijiAI — Türkçe Sesli Asistan",
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     backgroundColor: "#eef1f6",
     autoHideMenuBar: true,
     webPreferences: {

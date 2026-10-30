@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="DijiAI">
+  <!--
+    DijiAI marka ikonu — kaynak dosya.
+
+    Tasarım kararları:
+    - Yuvarlatılmış kare (rx 112): masaüstü kabukları ve dock için doğal form.
+    - Koyu lacivert zemin: arayüzün "Kuantum Cam" paletiyle aynı aile.
+    - Monogram "D": harf YOL (path) olarak çizildi, fonta bağımlı değil.
+      Böylece ikon hiçbir sistemde farklı görünmez (16 px'te bile okunur).
+    - İç boşluktaki üç ses çubuğu `fill-rule="evenodd"` ile açılan delikten
+      görünür; asistanın "ses" doğasını tek bakışta anlatır.
+    - Metin YOK: simge 16 px'e indiğinde okunmaz hale gelirdi.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1b2a4d"/>
+      <stop offset="0.55" stop-color="#111a30"/>
+      <stop offset="1" stop-color="#080d18"/>
+    </linearGradient>
+
+    <radialGradient id="halo" cx="0.5" cy="0.22" r="0.68">
+      <stop offset="0" stop-color="#5ee7ff" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#5ee7ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="glyph" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#dbe9ff"/>
+      <stop offset="1" stop-color="#9fb6d8"/>
+    </linearGradient>
+
+    <linearGradient id="wave" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b9f7ff"/>
+      <stop offset="1" stop-color="#2ec7ea"/>
+    </linearGradient>
+
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+  </defs>
+
+  <!-- zemin -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#halo)"/>
+  <rect x="28" y="28" width="456" height="456" rx="100" fill="none"
+        stroke="#5ee7ff" stroke-opacity="0.15" stroke-width="2"/>
+
+  <!-- alt parıltı: monogramı zeminden ayırır -->
+  <ellipse cx="256" cy="424" rx="132" ry="18" fill="#5ee7ff" opacity="0.09" filter="url(#soft)"/>
+
+  <!--
+    "D" monogramı tek path, iki alt yol (evenodd iç alanı oyar):
+      dış gövde -> x 152..384, y 116..396
+      iç delik  -> x 204..336, y 168..344
+    Kavis yönü kritik: ekran koordinatlarında y aşağı büyür. Üst noktadan
+    başlayan yay sweep=1 ile SAĞA, alt noktadan başlayan yay ise sweep=0 ile
+    SAĞA kavis yapar. İkisi de sağa bakmazsa harf "D" değil hilal olur.
+  -->
+  <path fill="url(#glyph)" fill-rule="evenodd"
+        d="M152 116 H244 A140 140 0 0 1 244 396 H152 Z
+           M204 168 V344 H244 A92 92 0 0 0 244 168 Z"/>
+
+  <!--
+    Ses çubukları — simetrik kısa/uzun/kısa, hepsi 256 px yatay eksende ortalı.
+    Deliğin sağ kenarı bir YAY olduğu için genişlik sabit değil: y=183'te
+    x≈302, y=256'da x≈336. Çubuklar x 214..286 aralığında tutuldu; böylece
+    en uzun çubuğun uçları bile beyaz gövdeye taşmaz (kesik görünmez).
+  -->
+  <g fill="url(#wave)">
+    <rect x="214" y="206" width="18" height="100" rx="9"/>
+    <rect x="247" y="183" width="18" height="146" rx="9"/>
+    <rect x="280" y="206" width="18" height="100" rx="9"/>
+  </g>
+</svg>
