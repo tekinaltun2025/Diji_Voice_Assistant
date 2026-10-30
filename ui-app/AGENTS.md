@@ -9,9 +9,25 @@
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
 
-- Sesli asistan arayüzü tek sayfalı bir widget olarak tutulur; istek yalnızca ekran tasarımı olduğu için gerçek AI yanıtı taklit edilmez.
-- Konuşma geçmişi cihazdaki tarayıcı depolamasında tutulur; hesap veya sunucu kurulumu gerektirmez.
-- Sistem metrikleri ses formunun iki yanında, widget içinde örnek veriler olarak gösterilir; tarayıcı Ubuntu donanım ölçümlerine doğrudan erişemediği için gerçek veri gibi sunulmaz.
-- Python masaüstü teslimi ayrı bir kaynak paketidir; web önizlemesinden bağımsızdır ve gerçek CPU/RAM ölçümlerini okurken desteklenmeyen metrikleri boş bırakır.
-- QuantumWave renders the liquid audio form using Canvas 2D; microphone analysis stays entirely in the browser and releases tracks and AudioContext on stop or unmount, without speech recognition or audio uploads.
-- Electron masaüstü teslimi `vite.electron.config.ts` (base './', spa.enabled) + `scripts/prepare-electron.cjs` + `electron/main.cjs` ile üretilir; çıktı `app://jarvis/` özel protokolü üzerinden yüklenir çünkü file:// yolunda yönlendirici "/" rotasını bulamaz. `electron-release` çıktıları repoya yazılmaz (10 MB dosya limiti) ve paketleme `--out=/tmp` ile yapılır.
+- The voice assistant UI is kept as a single-page widget; the request was for
+  screen design only, so no real AI response is simulated.
+- Conversation history lives in the device's browser storage; it needs no
+  account and no server setup.
+- System metrics are shown beside the audio form inside the widget as **sample
+  data**; a browser cannot read Ubuntu hardware measurements directly, so they
+  are not presented as real values.
+- The Python desktop deliverable is a separate source package; it is independent
+  of the web preview and reads actual CPU/RAM measurements while leaving
+  unsupported metrics blank.
+- `QuantumWave` renders the liquid audio form with Canvas 2D; microphone analysis
+  stays entirely in the browser and releases the tracks and the `AudioContext` on
+  stop or unmount, with no speech recognition and no audio uploads.
+- The Electron desktop deliverable is produced with
+  `vite.electron.config.ts` (`base: './'`, `spa.enabled`) +
+  `scripts/prepare-electron.cjs` + `electron/main.cjs`; the output is loaded over
+  the `app://jarvis/` custom protocol because on the `file://` path the router
+  cannot find the `/` route. `electron-release` output is not written into the
+  repository (10 MB file limit) and packaging is done with `--out=/tmp`.
+- The real agent bridge (`electron/agent-bridge.cjs` + `electron/preload.cjs`)
+  exposes only the narrow `window.diji` surface; see
+  [`README.en.md`](README.en.md) and [`../docs/en/API.md`](../docs/en/API.md).
