@@ -165,14 +165,29 @@ function Index() {
   /**
    * API anahtarı istenen sağlayıcı. `null` ise parola alanı gizli.
    *
-   * Ajan uzak sağlayıcı için anahtar bulamazsa `apiKeyRequired: true` döner ve
-   * geçiş YAPMAZ; bu durumda alan açılır. Girilen anahtar yalnızca ajana
-   * gönderilir, ajan da 0600 izinli ayrı bir dosyaya yazar — tarayıcı
-   * deposunda (localStorage) ASLA tutulmaz.
+   * Alan, anahtar gerektiren sağlayıcı SEÇİLDİĞİ ANDA açılır — ajanın
+   * `apiKeyRequired: true` yanıtı beklenmez (o yalnızca yedek yoldur).
+   * Girilen anahtar yalnızca ajana gönderilir, ajan da 0600 izinli ayrı bir
+   * dosyaya yazar — tarayıcı deposunda (localStorage) ASLA tutulmaz.
    */
   const [keyPrompt, setKeyPrompt] = useState<LlmProviderId | null>(null);
   /** Parola alanındaki geçici değer; gönderimden sonra temizlenir. */
   const [keyDraft, setKeyDraft] = useState("");
+  /**
+   * Ajan anahtarsız bir uzak sağlayıcıyla çalışıyorsa alanı bir kez
+   * kendiliğinden aç. `ref` koruması şart: kullanıcı "vazgeç"e bastığında
+   * katalog her tazelenişinde alan yeniden açılmamalı.
+   */
+  const autoKeyPrompted = useRef(false);
+  useEffect(() => {
+    const providerState = modelCatalog?.llmProvider;
+    if (!providerState || autoKeyPrompted.current) return;
+    const option = providerState.options.find((item) => item.id === providerState.current);
+    if (option?.requiresApiKey && !option.apiKeyPresent) {
+      autoKeyPrompted.current = true;
+      setKeyPrompt(providerState.current);
+    }
+  }, [modelCatalog]);
   const active = conversations.find((item) => item.id === activeId) ?? conversations[0];
   // Ajan mikrofonu sahiplenir: yerel getUserMedia yerine bu bayrak kullanılır.
   const micOn = isListening;
@@ -361,26 +376,57 @@ function Index() {
   /**
    * LLM sağlayıcısını değiştirir (yerel ↔ DeepSeek).
    *
-   * Akış — kullanıcının isteği tam olarak budur ("seçilirse API key istesin"):
-   *  1. Sağlayıcı seçilir, `apiKey` GÖNDERİLMEZ.
-   *  2. Ajan uzak sağlayıcı için anahtar bulamazsa geçiş YAPMAZ ve
-   *     `apiKeyRequired:true` döner.
-   *  3. Arayüz parola alanını açar; kullanıcı anahtarı girer.
-   *  4. Anahtar `submitProviderKey()` ile gönderilir; ajan onu 0600 izinli
+   * Akış — kullanıcının isteği tam olarak budur ("non-local seçilirse anahtar
+   * boşluğu gelsin, oradan girilirse lokale kaydedilsin"):
+   *  1. Sağlayıcı seçilir.
+   *  2. Katalogda `requiresApiKey` ise parola alanı ANINDA açılır. Bu karar
+   *     burada verilir; ajanın "anahtar gerekli" yanıtı beklenmez.
+   *  3. Kayıtlı anahtar yoksa geçiş YAPILMAZ — önce anahtar girilir.
+   *  4. Anahtar `submitProviderKey()` ile ajana gider; ajan onu 0600 izinli
    *     ayrı bir dosyaya yazar ve sağlayıcıya geçer.
    *
    * Anahtar hiçbir zaman `localStorage`'a yazılmaz.
    */
   async function changeLlmProvider(provider: LlmProviderId) {
-    const currentProvider = modelCatalog?.llmProvider?.current;
-    if (!currentProvider || provider === currentProvider) return;
+    const providerState = modelCatalog?.llmProvider;
+    if (!providerState) return;
+    if (provider === providerState.current) {
+      /*
+       * Kusur (canli dogrulamada yakalandi): anahtar alani acikken kullanici
+       * select'i ESKI degerine dondurdugunde (`vazgec` yerine) alan acik
+       * kaliyordu — hicbir gecis yapilmadigi icin `onChange` erken donuyor
+       * ve temizlik calismiyordu. Alan her durumda kapatilir.
+       */
+      setKeyPrompt(null);
+      setKeyDraft("");
+      return;
+    }
+
+    const option = providerState.options.find((item) => item.id === provider);
 
     setProviderNotice("");
     setKeyDraft("");
     setKeyPrompt(null);
 
+    /*
+     * PROAKTİF ALAN: anahtar gerektiren sağlayıcı seçildiği anda parola alanı
+     * açılır. Kayıtlı anahtar YOKSA sağlayıcıya hiç geçilmez (her tur 401
+     * olurdu); kullanıcı anahtarı girer, `submitProviderKey()` hem kaydeder
+     * hem geçer. Anahtar ZATEN kayıtlıysa alan açılmaz — gereksiz titreme
+     * olmaması için doğrudan geçiş denenir, reddedilirse alan açılır.
+     */
+    if (option?.requiresApiKey && !option.apiKeyPresent) {
+      setKeyPrompt(provider);
+      setProviderNotice(
+        `${providerLabel(provider)} için API anahtarı gerekli — girip "kaydet ve geç"e basın.`,
+      );
+      return;
+    }
+
     const result = await selectLlmProvider(provider);
     if (result.ok) {
+      // Kayıtlı anahtarla geçiş yapıldı; alanı kapatmak görsel gürültüyü önler.
+      setKeyPrompt(null);
       const label = providerLabel(provider);
       const parts = [`Sağlayıcı: ${label}`];
       parts.push(result.persisted ? "· kalıcı kaydedildi" : "· yalnızca bu oturum");
@@ -390,7 +436,7 @@ function Index() {
     }
 
     if (result.apiKeyRequired) {
-      // Geçiş yapılmadı; anahtar alanı açılır ve kullanıcı bilgilendirilir.
+      // Yedek yol: katalog "anahtar var" dese de ajan reddetti (silinmiş/geçersiz).
       setKeyPrompt(provider);
       setProviderNotice(
         result.reason ?? `${providerLabel(provider)} için API anahtarı gerekli.`,
@@ -412,7 +458,7 @@ function Index() {
       return;
     }
 
-    setModelNotice("");
+    setProviderNotice("");
     const result = await selectLlmProvider(keyPrompt, key);
     // Anahtar artık ajanda; arayüzde tutmanın anlamı yok.
     setKeyDraft("");
@@ -573,10 +619,17 @@ function Index() {
                     <span>DİL MODELİ SAĞLAYICI</span>
                     {modelSwitching === "llm" && <b>geçiliyor…</b>}
                   </div>
+                  {/*
+                    `keyPrompt` doluysa kullanıcı o sağlayıcıyı SEÇMİŞ ama
+                    anahtar girmediği için geçiş YAPILMAMIŞTIR. Kutuyu
+                    `current`a (yerel) bağlamak, kullanıcının az önce seçtiği
+                    satırla anahtar alanını çelişkili gösteriyordu — canlı
+                    doğrulamada tam olarak bu görüldü.
+                  */}
                   <select
                     className="settings-select"
                     aria-label="Dil modeli sağlayıcısı"
-                    value={modelCatalog.llmProvider.current}
+                    value={keyPrompt ?? modelCatalog.llmProvider.current}
                     disabled={modelSwitching !== null}
                     onChange={(event) =>
                       void changeLlmProvider(event.target.value as LlmProviderId)
@@ -604,10 +657,11 @@ function Index() {
                     })()}
                   </span>
                   {/*
-                    API ANAHTARI: yalnızca ajan "anahtar gerekli" dediğinde
-                    açılır. Değer ajanın 0600 izinli ayrı dosyasına yazılır,
-                    `~/.config/diji/env` içine ASLA girmez ve arayüzde
-                    saklanmaz (gönderimden sonra temizlenir).
+                    API ANAHTARI: anahtar gerektiren sağlayıcı (DeepSeek gibi
+                    uzak bir model) seçildiği ANDA açılır. Değer ajanın 0600
+                    izinli ayrı dosyasına yazılır, `~/.config/diji/env` içine
+                    ASLA girmez ve arayüzde saklanmaz (gönderimden sonra
+                    temizlenir).
                   */}
                   {keyPrompt && (
                     <div className="settings-key-prompt">
@@ -660,6 +714,31 @@ function Index() {
                       </span>
                     </div>
                   )}
+                  {/*
+                    KAYITLI ANAHTARI DEĞİŞTİRME yolu. Alan yalnızca anahtar
+                    yokken kendiliğinden açılır; anahtar zaten kayıtlıysa
+                    kullanıcı bu düğmeyle alanı elle açabilir (yenileme/silme).
+                  */}
+                  {!keyPrompt && (() => {
+                    const activeOption = modelCatalog.llmProvider.options.find(
+                      (option) => option.active,
+                    );
+                    if (!activeOption?.requiresApiKey) return null;
+                    return (
+                      <Button
+                        variant="ghost"
+                        className="settings-key-update"
+                        disabled={modelSwitching !== null}
+                        onClick={() => {
+                          setKeyDraft("");
+                          setProviderNotice("");
+                          setKeyPrompt(activeOption.id);
+                        }}
+                      >
+                        API anahtarını değiştir
+                      </Button>
+                    );
+                  })()}
                   {providerNotice && (
                     <p className="settings-note" role="status">
                       {providerNotice}

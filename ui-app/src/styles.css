@@ -254,6 +254,7 @@
 .settings-key-prompt input.settings-select { height: 32px; font-family: var(--font-mono, monospace); letter-spacing: .02em; }
 .settings-key-actions { display: flex; gap: 8px; }
 .settings-key-actions button { font-size: 9px; height: 28px; padding: 0 10px; }
+.settings-key-update { justify-self: start; font-size: 9px; height: 26px; padding: 0 8px; color: var(--primary); }
 /* Onay diyaloğu: ajan gerçekten onay beklerken görünür (uydurma yok). */
 .confirmation-alert { margin-top: 12px; padding: 11px 10px; border: 1px solid var(--primary); border-radius: 5px; background: var(--secondary); display: grid; gap: 8px; }
 .confirmation-head { display: flex; justify-content: space-between; align-items: center; font: 9px var(--font-display); color: var(--primary); }.confirmation-head b { font: 10px var(--font-display); }
