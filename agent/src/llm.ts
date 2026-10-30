@@ -89,6 +89,66 @@ export class LLMEngine {
   }
 
   /**
+   * Sağlayıcıyı ÇALIŞMA ZAMANINDA değiştirir (yerel ↔ DeepSeek).
+   *
+   * Neden `setModel`'den ayrı: model değişimi yalnızca istek gövdesindeki
+   * `model` alanını değiştirir; sağlayıcı değişimi ise `baseUrl` + `apiKey`
+   * alanlarını da değiştirir. Yalnızca modeli değiştirmek, DeepSeek model
+   * adını yerel sunucuya göndermek gibi sessiz bir hataya yol açardı.
+   *
+   * Geçiş ATOMİKTİR: yeni uç nokta doğrulanmadan (healthCheck) eski
+   * değerler korunur; doğrulama başarısız olursa hiçbir şey değişmez.
+   */
+  async setProvider(next: {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    apiKeyFile?: string;
+  }): Promise<{ previousBaseUrl: string; previousModel: string }> {
+    const baseUrl = String(next.baseUrl ?? '').replace(/\/+$/, '');
+    const model = String(next.model ?? '').trim();
+    if (!baseUrl) throw new Error('baseUrl boş olamaz');
+    if (!model) throw new Error('model boş olamaz');
+
+    const previous = {
+      previousBaseUrl: this.baseUrl,
+      previousModel: this.model,
+    };
+    const previousKey = this.apiKey;
+
+    this.baseUrl = baseUrl;
+    this.model = model;
+    this.apiKey = String(next.apiKey ?? '').trim();
+
+    try {
+      await this.healthCheck();
+    } catch (error) {
+      // Geri al: doğrulanmamış bir uç noktada kalmak her turu bozardı.
+      this.baseUrl = previous.previousBaseUrl;
+      this.model = previous.previousModel;
+      this.apiKey = previousKey;
+      throw error;
+    }
+
+    logInfo('LLM saglayicisi degistirildi', {
+      baseUrl: this.baseUrl,
+      model: this.model,
+      hasKey: this.apiKey.length > 0,
+    });
+    return previous;
+  }
+
+  /** Etkin uç nokta (arayüz teşhisi için; anahtar ASLA dönmez). */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /** Anahtar tanımlı mı (içeriği sızdırmadan). */
+  hasApiKey(): boolean {
+    return this.apiKey.length > 0;
+  }
+
+  /**
    * Sunucuya gönderilecek toplam `max_tokens`.
    * `maxTokens` yalnızca KULLANICIYA dönen yanıt için ayrılmıştır; buna
    * reasoning rezervi eklenir. Rezerv 0 ise davranış eskisiyle aynıdır.

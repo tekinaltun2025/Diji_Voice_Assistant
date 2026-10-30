@@ -23,7 +23,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { logDebug, logWarn } from '@diji/shared';
+import { LLM_PROVIDER_PRESETS, logDebug, logWarn } from '@diji/shared';
+// `hasApiKeyFile` anahtarin ICERIGINI okumaz, yalnizca varligini bildirir.
+import { hasApiKeyFile } from './env-prefs';
 
 /** Arayüzdeki bir seçim satırının sözleşmesi. */
 export interface ModelOption {
@@ -37,10 +39,36 @@ export interface ModelOption {
   detail: string;
 }
 
+/**
+ * LLM saglayicisi hakkinda arayuze donen ozet.
+ *
+ * `apiKeyPresent` YALNIZCA boolean'dir; anahtarin kendisi HICBIR ZAMAN
+ * arayuze/HTTP yanitina konmaz (ekran goruntusu, gunluk veya paylasilan
+ * bir terminal ciktisindan sizmasin).
+ */
+export interface LlmProviderState {
+  current: 'local' | 'deepseek';
+  /** Etkin uc nokta (anahtar icermez). */
+  baseUrl: string;
+  /** Arayuzde listelenecek saglayicilar. */
+  options: Array<{
+    id: 'local' | 'deepseek';
+    label: string;
+    baseUrl: string;
+    requiresApiKey: boolean;
+    /** Bu saglayicinin anahtari kayitli mi. */
+    apiKeyPresent: boolean;
+    /** Su an etkin mi (motorun gercek durumu). */
+    active: boolean;
+  }>;
+}
+
 export interface ModelCatalog {
   stt: { current: string; options: ModelOption[] };
   tts: { current: string; options: ModelOption[] };
   llm: { current: string; options: ModelOption[] };
+  /** LLM saglayici secimi (ayri bir eksen: saglayici x model). */
+  llmProvider?: LlmProviderState;
   /** Katalog hangi dizinden okundu (teşhis için). */
   modelsDir: string;
 }
@@ -178,7 +206,7 @@ function readableTtsLabel(dirName: string): string {
  * Sunucu kapalıysa `available: false` olan tek satır döner: kullanıcı neyin
  * seçili olduğunu görür ama "seçilebilir" sanmaz.
  */
-async function scanLlmModels(
+export async function scanLlmModels(
   baseUrl: string,
   apiKey: string,
   configuredModel: string
@@ -199,19 +227,35 @@ async function scanLlmModels(
 
     const options: ModelOption[] = [];
     for (const item of raw) {
-      const id = String(item?.model ?? item?.name ?? item?.id ?? '').trim();
+      /*
+       * KIMLIK secimi — sira kritik.
+       *
+       * Once `model` (llama.cpp tam dosya yolunu burada dondurur), sonra
+       * `id` (OpenAI uyumlu API'lerin KIMLIGI), en son `name`.
+       *
+       * `name` neden sonda: DeepSeek `/v1/models` yaniti
+       *   { "id": "deepseek-flash", "name": "DeepSeek-V4.1-Flash" }
+       * donuyor. `name` KISAYI gosterilen addir; API ise istekte `id`
+       * bekler. Canli dogrulamada `name` one alindigi icin sunucuya
+       * `DeepSeek-V4.1-Flash` gonderildi — yanlis kimlik.
+       */
+      const id = String(item?.model ?? item?.id ?? item?.name ?? '').trim();
       if (!id) continue;
       // Sunucu tam dosya yolu döndürüyor (llama.cpp). Kullanıcıya okunur ad ver,
       // ama seçimde TAM yolu gönder: sunucu bu ada göre eşleştiriyor.
       const base = id.split('/').pop() ?? id;
+      // Görünen ad: varsa sunucunun verdigi okunur `name`, yoksa kimlikten.
+      const pretty = String(item?.name ?? '').trim();
       const caps: string[] = Array.isArray(item?.capabilities) ? item.capabilities : [];
       const params = String(item?.details?.parameter_size ?? '').trim();
       const quant = String(item?.details?.quantization_level ?? '').trim();
+      const contextWindow = Number(item?.context_window ?? 0);
+      const ctxLabel = contextWindow > 0 ? `${Math.round(contextWindow / 1024)}K bağlam` : '';
       options.push({
         id,
-        label: base.replace(/\.gguf$/i, ''),
+        label: pretty || base.replace(/\.gguf$/i, ''),
         available: true,
-        detail: [params, quant, caps.includes('multimodal') ? 'çok kipli' : 'metin']
+        detail: [params, quant, ctxLabel, caps.includes('multimodal') ? 'çok kipli' : 'metin']
           .filter(Boolean)
           .join(' · '),
       });
@@ -253,6 +297,8 @@ export interface BuildCatalogInput {
   llmBaseUrl: string;
   llmApiKey: string;
   llmCurrent: string;
+  /** Etkin LLM saglayicisi (motorun gercek durumu). */
+  llmProvider: 'local' | 'deepseek';
 }
 
 /**
@@ -324,7 +370,33 @@ export async function buildModelCatalog(input: BuildCatalogInput): Promise<Model
     stt: { current: sttCurrentId, options: sttOptions },
     tts: { current: input.ttsCurrent, options: ttsOptions },
     llm: { current: input.llmCurrent, options: llmOptions },
+    llmProvider: buildLlmProviderState(input.llmProvider, input.llmBaseUrl),
     modelsDir,
+  };
+}
+
+/**
+ * Arayuzun saglayici secimini cizebilmesi icin gereken durum.
+ *
+ * `apiKeyPresent` her saglayici icin AYRI sorulur (DeepSeek kayitli olsa bile
+ * yerel saglayicida anahtar aranmaz). Anahtarin kendisi asla okunup
+ * dondurulmez; yalnizca `length > 0` bilgisi.
+ */
+function buildLlmProviderState(
+  current: 'local' | 'deepseek',
+  baseUrl: string
+): LlmProviderState {
+  return {
+    current,
+    baseUrl,
+    options: LLM_PROVIDER_PRESETS.map((preset) => ({
+      id: preset.id,
+      label: preset.label,
+      baseUrl: preset.baseUrl,
+      requiresApiKey: preset.requiresApiKey,
+      apiKeyPresent: preset.requiresApiKey ? hasApiKeyFile(preset.id) : true,
+      active: preset.id === current,
+    })),
   };
 }
 

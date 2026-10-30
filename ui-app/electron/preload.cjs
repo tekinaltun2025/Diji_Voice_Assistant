@@ -48,6 +48,18 @@ const api = {
   /** Model değiştir (`POST /models/select`). */
   selectModel: (kind, id) =>
     ipcRenderer.invoke("diji:select-model", String(kind ?? ""), String(id ?? "")),
+  /**
+   * LLM sağlayıcısını değiştir (`POST /llm/provider`).
+   *
+   * `apiKey` verilmezse ajan kayıtlı anahtarı kullanır; hiç yoksa yanıt
+   * `{ ok:false, apiKeyRequired:true }` olur ve geçiş yapılmaz.
+   */
+  selectLlmProvider: (provider, apiKey) =>
+    ipcRenderer.invoke(
+      "diji:select-llm-provider",
+      String(provider ?? ""),
+      typeof apiKey === "string" ? apiKey : "",
+    ),
 
   // ------------------------------------------------------------ pencere kontrolü
   /**

@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowUp, AudioLines, CircuitBoard, Cpu, History, MemoryS
 import { Button } from "@/components/ui/button";
 import { QuantumWave } from "@/components/quantum-wave";
 import { useAgent } from "@/hooks/use-agent";
-import type { ConversationItem, ModelKind, Stage, StageStatus } from "@/types/diji";
+import type { ConversationItem, LlmProviderId, ModelKind, Stage, StageStatus } from "@/types/diji";
 import { Power, Settings2, Mail, CalendarDays, CloudSun, Globe, HardDrive, StickyNote, Hash, Brain, Activity, FileText, Box, Network, Volume2, Play, Send, MessageSquare, Minus, Maximize2, Minimize2, X } from "lucide-react";
 
 type Message = { id: string; role: "user" | "assistant"; text: string; time: number };
@@ -122,9 +122,19 @@ const modules = [
  */
 const MODEL_SECTIONS: Array<{ kind: ModelKind; title: string; hint: string; icon: LucideIcon }> = [
   { kind: "stt", title: "SES TANIMA (STT)", hint: "Whisper modelleri. Seçim motoru yeniden başlatır.", icon: FileText },
-  { kind: "llm", title: "DİL MODELİ (LLM)", hint: "Yerel sunucudaki modeller. Seçim anında geçerli olur.", icon: Box },
+  { kind: "llm", title: "DİL MODELİ (LLM)", hint: "Seçili sağlayıcının modelleri. Seçim anında geçerli olur.", icon: Box },
   { kind: "tts", title: "SESLENDİRME (TTS)", hint: "VITS modelleri. Seçim motoru yeniden başlatır.", icon: Volume2 },
 ];
+
+/**
+ * Sağlayıcı kimliğinin okunur adı.
+ *
+ * Katalog yüklü değilse (panel ilk açılışta) sabit karşılıklar kullanılır;
+ * böylece geri bildirim metni hiçbir durumda boş bir etiket göstermez.
+ */
+function providerLabel(provider: LlmProviderId): string {
+  return provider === "deepseek" ? "DeepSeek" : "Yerel yönlendirici";
+}
 
 function Index() {
   const {
@@ -132,6 +142,7 @@ function Index() {
     micLevel, isListening, isSpeaking, toggleListen, ask, confirm, bargeIn,
     pendingConfirmation, mcpServers,
     modelCatalog, modelsLoading, modelSwitching, loadModels, selectModel,
+    selectLlmProvider,
   } = useAgent();
 
   const [conversations, setConversations] = useState<Conversation[]>([starter]);
@@ -149,6 +160,19 @@ function Index() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Ayarlar panelindeki model değişimi geri bildirimi (durum metni). */
   const [modelNotice, setModelNotice] = useState("");
+  /** Ayarlar panelindeki sağlayıcı değişimi geri bildirimi. */
+  const [providerNotice, setProviderNotice] = useState("");
+  /**
+   * API anahtarı istenen sağlayıcı. `null` ise parola alanı gizli.
+   *
+   * Ajan uzak sağlayıcı için anahtar bulamazsa `apiKeyRequired: true` döner ve
+   * geçiş YAPMAZ; bu durumda alan açılır. Girilen anahtar yalnızca ajana
+   * gönderilir, ajan da 0600 izinli ayrı bir dosyaya yazar — tarayıcı
+   * deposunda (localStorage) ASLA tutulmaz.
+   */
+  const [keyPrompt, setKeyPrompt] = useState<LlmProviderId | null>(null);
+  /** Parola alanındaki geçici değer; gönderimden sonra temizlenir. */
+  const [keyDraft, setKeyDraft] = useState("");
   const active = conversations.find((item) => item.id === activeId) ?? conversations[0];
   // Ajan mikrofonu sahiplenir: yerel getUserMedia yerine bu bayrak kullanılır.
   const micOn = isListening;
@@ -334,6 +358,80 @@ function Index() {
     setModelNotice(parts.join(" "));
   }
 
+  /**
+   * LLM sağlayıcısını değiştirir (yerel ↔ DeepSeek).
+   *
+   * Akış — kullanıcının isteği tam olarak budur ("seçilirse API key istesin"):
+   *  1. Sağlayıcı seçilir, `apiKey` GÖNDERİLMEZ.
+   *  2. Ajan uzak sağlayıcı için anahtar bulamazsa geçiş YAPMAZ ve
+   *     `apiKeyRequired:true` döner.
+   *  3. Arayüz parola alanını açar; kullanıcı anahtarı girer.
+   *  4. Anahtar `submitProviderKey()` ile gönderilir; ajan onu 0600 izinli
+   *     ayrı bir dosyaya yazar ve sağlayıcıya geçer.
+   *
+   * Anahtar hiçbir zaman `localStorage`'a yazılmaz.
+   */
+  async function changeLlmProvider(provider: LlmProviderId) {
+    const currentProvider = modelCatalog?.llmProvider?.current;
+    if (!currentProvider || provider === currentProvider) return;
+
+    setProviderNotice("");
+    setKeyDraft("");
+    setKeyPrompt(null);
+
+    const result = await selectLlmProvider(provider);
+    if (result.ok) {
+      const label = providerLabel(provider);
+      const parts = [`Sağlayıcı: ${label}`];
+      parts.push(result.persisted ? "· kalıcı kaydedildi" : "· yalnızca bu oturum");
+      if (result.persistError) parts.push(`— ${result.persistError}`);
+      setProviderNotice(parts.join(" "));
+      return;
+    }
+
+    if (result.apiKeyRequired) {
+      // Geçiş yapılmadı; anahtar alanı açılır ve kullanıcı bilgilendirilir.
+      setKeyPrompt(provider);
+      setProviderNotice(
+        result.reason ?? `${providerLabel(provider)} için API anahtarı gerekli.`,
+      );
+      return;
+    }
+
+    setProviderNotice(
+      result.reason ? `Değiştirilemedi: ${result.reason}` : "Sağlayıcı değiştirilemedi.",
+    );
+  }
+
+  /** Parola alanındaki anahtarı ajana gönderir ve sağlayıcıya geçer. */
+  async function submitProviderKey() {
+    if (!keyPrompt) return;
+    const key = keyDraft.trim();
+    if (!key) {
+      setProviderNotice("API anahtarı boş olamaz.");
+      return;
+    }
+
+    setModelNotice("");
+    const result = await selectLlmProvider(keyPrompt, key);
+    // Anahtar artık ajanda; arayüzde tutmanın anlamı yok.
+    setKeyDraft("");
+
+    if (result.ok) {
+      setKeyPrompt(null);
+      setProviderNotice(
+        `Sağlayıcı: ${providerLabel(keyPrompt)} · anahtar kaydedildi (0600)${
+          result.persisted ? " · kalıcı" : ""
+        }`,
+      );
+      return;
+    }
+
+    setProviderNotice(
+      result.reason ? `Anahtar kabul edilmedi: ${result.reason}` : "Anahtar kabul edilmedi.",
+    );
+  }
+
   /** Onay sayacı: `expiresAt` doluysa kalan saniye, değilse 0. */
   const confirmationSecondsLeft = (() => {
     const expiresAt = pendingConfirmation?.expiresAt;
@@ -462,6 +560,113 @@ function Index() {
               <p className="settings-note">Seçim kalıcı kaydedilir (~/.config/diji/env); uygulama yeniden başlasa da geçerli olur.</p>
               {modelsLoading && !modelCatalog && <p className="settings-note">Modeller taranıyor…</p>}
               {!modelsLoading && !modelCatalog && <p className="settings-note">Model listesi alınamadı — ajan bağlı mı?</p>}
+              {/*
+                LLM SAĞLAYICI bölümü — model listesinden ÖNCE gelir: sağlayıcı
+                değişimi `baseUrl` + `anahtar` + `model` alanlarını birlikte
+                değiştirir, dolayısıyla aşağıdaki LLM model listesi seçili
+                sağlayıcıya aittir.
+              */}
+              {modelCatalog?.llmProvider && (
+                <div className="settings-model" key="llm-provider">
+                  <div className="settings-model-title">
+                    <CircuitBoard size={15} />
+                    <span>DİL MODELİ SAĞLAYICI</span>
+                    {modelSwitching === "llm" && <b>geçiliyor…</b>}
+                  </div>
+                  <select
+                    className="settings-select"
+                    aria-label="Dil modeli sağlayıcısı"
+                    value={modelCatalog.llmProvider.current}
+                    disabled={modelSwitching !== null}
+                    onChange={(event) =>
+                      void changeLlmProvider(event.target.value as LlmProviderId)
+                    }
+                  >
+                    {modelCatalog.llmProvider.options.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                        {option.requiresApiKey && !option.apiKeyPresent ? " · anahtar gerekli" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-model-detail">
+                    {(() => {
+                      const active = modelCatalog.llmProvider.options.find(
+                        (option) => option.active,
+                      );
+                      if (!active) return "Etkin sağlayıcı bilinmiyor.";
+                      const keyState = active.requiresApiKey
+                        ? active.apiKeyPresent
+                          ? "anahtar kayıtlı"
+                          : "anahtar yok"
+                        : "anahtar gerekmez";
+                      return `${active.baseUrl} · ${keyState}`;
+                    })()}
+                  </span>
+                  {/*
+                    API ANAHTARI: yalnızca ajan "anahtar gerekli" dediğinde
+                    açılır. Değer ajanın 0600 izinli ayrı dosyasına yazılır,
+                    `~/.config/diji/env` içine ASLA girmez ve arayüzde
+                    saklanmaz (gönderimden sonra temizlenir).
+                  */}
+                  {keyPrompt && (
+                    <div className="settings-key-prompt">
+                      <label htmlFor="llm-api-key">
+                        {providerLabel(keyPrompt)} API anahtarı
+                      </label>
+                      <input
+                        id="llm-api-key"
+                        className="settings-select"
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="sk-…"
+                        value={keyDraft}
+                        disabled={modelSwitching !== null}
+                        onChange={(event) => setKeyDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void submitProviderKey();
+                          }
+                          if (event.key === "Escape") {
+                            setKeyPrompt(null);
+                            setKeyDraft("");
+                          }
+                        }}
+                      />
+                      <div className="settings-key-actions">
+                        <Button
+                          variant="outline"
+                          onClick={() => void submitProviderKey()}
+                          disabled={modelSwitching !== null || !keyDraft.trim()}
+                        >
+                          {modelSwitching !== null ? "kaydediliyor…" : "kaydet ve geç"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setKeyPrompt(null);
+                            setKeyDraft("");
+                          }}
+                          disabled={modelSwitching !== null}
+                        >
+                          vazgeç
+                        </Button>
+                      </div>
+                      <span className="settings-model-detail">
+                        Anahtar bu cihazda 0600 izinli ayrı bir dosyaya yazılır; env
+                        dosyasına ve arayüz deposuna kaydedilmez.
+                      </span>
+                    </div>
+                  )}
+                  {providerNotice && (
+                    <p className="settings-note" role="status">
+                      {providerNotice}
+                    </p>
+                  )}
+                </div>
+              )}
               {modelCatalog && MODEL_SECTIONS.map(({ kind, title, hint, icon: Icon }) => {
                 const section = modelCatalog[kind];
                 const options = section?.options ?? [];

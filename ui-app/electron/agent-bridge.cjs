@@ -127,11 +127,25 @@ function createAgentBridge({ port = 8899, getWindow, log } = {}) {
                 }
               }
               if (res.statusCode && res.statusCode >= 400) {
+                /*
+                 * GOVDE KORUNUR.
+                 *
+                 * Ajan, "gecis yapmadi" durumlarini 400/409 ile ve ANLAMLI bir
+                 * govdeyle bildirir. Ornegin `/llm/provider` anahtar yoksa
+                 *   { ok:false, current:"local", apiKeyRequired:true, reason:"…" }
+                 * doner. Bu alanlar atilirsa arayuz "anahtar gerekli" sinyalini
+                 * goremez ve parola alanini ACAMAZ — canli dogrulamada tam
+                 * olarak bu yasandi.
+                 *
+                 * Bu yuzden once govde yayilir, sonra koprunun kendi alanlari
+                 * yazilir (status her zaman gercek HTTP kodu kalir).
+                 */
                 done({
+                  ...(parsed && typeof parsed === "object" ? parsed : {}),
                   ok: false,
                   status: res.statusCode,
                   error:
-                    (parsed && (parsed.error || parsed.detail || parsed.message)) ||
+                    (parsed && (parsed.error || parsed.detail || parsed.message || parsed.reason)) ||
                     `HTTP ${res.statusCode}`,
                 });
                 return;
@@ -350,6 +364,23 @@ function createAgentBridge({ port = 8899, getWindow, log } = {}) {
         { kind: String(kind ?? ""), id: String(id ?? "") },
         TIMEOUT_MODEL_SELECT
       );
+    },
+
+    /**
+     * LLM sağlayıcısını değiştir (yerel ↔ DeepSeek).
+     *
+     * `apiKey` istekte yalnızca bir kez taşınır; ajan onu 0600 izinli
+     * `~/.config/diji/secrets/<provider>.key` dosyasına yazar ve yanıtta
+     * ASLA geri döndürmez. Uzak sağlayıcı için anahtar yoksa yanıt
+     * `{ ok:false, apiKeyRequired:true }` olur.
+     *
+     * Uzun aşım: geçiş öncesi `/v1/models` doğrulaması ve sağlık kontrolü
+     * yapılır (ağ turu). Yeni sağlayıcıya ulaşılamazsa geçiş geri alınır.
+     */
+    selectLlmProvider(provider, apiKey) {
+      const body = { provider: String(provider ?? "") };
+      if (typeof apiKey === "string" && apiKey.trim()) body.apiKey = apiKey.trim();
+      return request("POST", "/llm/provider", body, TIMEOUT_MODEL_SELECT);
     },
 
     /** SSE bağlantısı şu an açık mı? */

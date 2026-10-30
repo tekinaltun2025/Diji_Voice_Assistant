@@ -34,6 +34,79 @@ export function envFilePath(): string {
   return path.join(os.homedir(), '.config', 'diji', 'env');
 }
 
+/**
+ * Uzak LLM saglayicisinin API anahtarinin tutuldugu dosya.
+ *
+ * Neden `env` dosyasina YAZILMIYOR: `~/.config/diji/env` kullanicinin
+ * duzenledigi, yedekledigi ve bazen paylastigi bir dosya. Depo PUBLIC
+ * oldugu icin anahtarin oraya sizmasi gercek bir risk. Bu dosya ayri
+ * tutulur, dizini `0700`, kendisi `0600` olur ve `.gitignore` kapsamindadir
+ * (`~/.config` depo disinda oldugu icin zaten takip edilmez).
+ */
+export function apiKeyFilePath(provider: string): string {
+  return path.join(os.homedir(), '.config', 'diji', 'secrets', `${provider}.key`);
+}
+
+export interface ApiKeyWriteResult {
+  ok: boolean;
+  path: string;
+  error?: string;
+}
+
+/**
+ * API anahtarini 0600 izinli ayri dosyaya yazar.
+ *
+ * Bos anahtar "sil" anlamina gelir: dosya kaldirilir ve `ok:true` doner.
+ * Boylece kullanici anahtari temizleyerek uzak saglayiciyi devre disi
+ * birakabilir.
+ */
+export function writeApiKeyFile(provider: string, key: string): ApiKeyWriteResult {
+  const file = apiKeyFilePath(provider);
+  const trimmed = String(key ?? '').trim();
+
+  try {
+    if (!trimmed) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      logInfo('API anahtari silindi', { provider, file });
+      return { ok: true, path: file };
+    }
+
+    const dir = path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Gecici dosya + rename: yarida kesilen yazma eski anahtari bozmaz.
+    const temp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(temp, trimmed, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temp, file);
+    // `rename` var olan dosyanin modunu koruyabilir; acikca daraltilir.
+    fs.chmodSync(file, 0o600);
+
+    logInfo('API anahtari yazildi', { provider, file, length: trimmed.length });
+    return { ok: true, path: file };
+  } catch (error) {
+    logWarn('API anahtari yazilamadi', { provider, file, error: (error as Error).message });
+    return { ok: false, path: file, error: (error as Error).message };
+  }
+}
+
+/**
+ * API anahtarini dosyadan okur. Dosya yoksa bos dize doner (firlatmaz) —
+ * cagiran taraf "anahtar yok" durumunu normal akis olarak ele alir.
+ */
+export function readApiKeyFile(provider: string): string {
+  try {
+    const file = apiKeyFilePath(provider);
+    if (!fs.existsSync(file)) return '';
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Anahtarin var olup olmadigi (icerigi sizdirmadan) — arayuz icin. */
+export function hasApiKeyFile(provider: string): boolean {
+  return readApiKeyFile(provider).length > 0;
+}
+
 export interface EnvWriteResult {
   ok: boolean;
   /** Yazılan dosya (teşhis için arayüzde gösterilir). */

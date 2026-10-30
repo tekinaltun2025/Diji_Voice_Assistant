@@ -130,6 +130,10 @@ app.whenReady().then(() => {
   // Ayarlar ekranı: model listesi + seçim (çalışma zamanı motor değişimi).
   ipcMain.handle("diji:models", () => bridge.getModels());
   ipcMain.handle("diji:select-model", (_event, kind, id) => bridge.selectModel(kind, id));
+  // LLM sağlayıcısı (yerel ↔ DeepSeek). Anahtar ajan tarafında 0600 dosyaya yazılır.
+  ipcMain.handle("diji:select-llm-provider", (_event, provider, apiKey) =>
+    bridge.selectLlmProvider(provider, apiKey)
+  );
 
   // Başlık çubuğundaki pencere düğmeleri. Her tutamaç `{ ok, maximized? }` döner:
   // pencere yoksa ya da yok edildiyse sessizce başarısız olur (renderer çökmez).

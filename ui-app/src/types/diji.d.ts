@@ -176,6 +176,35 @@ export interface ModelSection {
   options: ModelOption[];
 }
 
+/** LLM sağlayıcı kimliği: yerel yönlendirici veya uzak DeepSeek API'si. */
+export type LlmProviderId = "local" | "deepseek";
+
+/** Ayarlar ekranındaki tek bir LLM sağlayıcı satırı. */
+export interface LlmProviderOption {
+  id: LlmProviderId;
+  label: string;
+  baseUrl: string;
+  /** `true` ise seçmek için API anahtarı gerekir (arayüz alanı açar). */
+  requiresApiKey: boolean;
+  /** Anahtar daha önce kaydedilmiş mi (0600 dosyada). Değeri asla gönderilmez. */
+  apiKeyPresent: boolean;
+  /** Şu anda çalışan sağlayıcı mı. */
+  active: boolean;
+}
+
+/**
+ * `/models` yanıtındaki LLM sağlayıcı bölümü.
+ *
+ * Neden model listesinden ayrı: sağlayıcı değişimi `baseUrl` + `apiKey` +
+ * `model` alanlarını birlikte değiştirir. Ayrı tutulmazsa kullanıcı yerel
+ * sunucuya `deepseek-flash` gönderebilir.
+ */
+export interface LlmProviderState {
+  /** Çalışan sağlayıcı (motorun gerçek durumu). */
+  current: LlmProviderId;
+  options: LlmProviderOption[];
+}
+
 /**
  * `/models` yanıtı — Ayarlar ekranının model listeleri.
  *
@@ -188,6 +217,12 @@ export interface ModelCatalog {
   stt: ModelSection;
   tts: ModelSection;
   llm: ModelSection;
+  /**
+   * LLM sağlayıcı bölümü (yerel ↔ DeepSeek).
+   *
+   * Eski ajanlarda bulunmaz; arayüz yoksa bölümü hiç göstermez.
+   */
+  llmProvider?: LlmProviderState;
   /** Kataloğun okunduğu dizin (teşhis için). */
   modelsDir?: string;
   error?: string;
@@ -213,6 +248,26 @@ export interface ModelSelectResult {
   /** Kalıcılık yazılamadıysa nedeni (izin hatası, disk dolu…). */
   persistError?: string;
   /** Kullanıcıya gösterilecek kalıcılık notu. */
+  persistHint?: string;
+  error?: string;
+}
+
+/** `POST /llm/provider` yanıtı. */
+export interface LlmProviderSelectResult {
+  ok: boolean;
+  /** Geçişten sonraki çalışan sağlayıcı. */
+  current?: LlmProviderId;
+  /** `ok:false` ise nedeni. */
+  reason?: string;
+  /**
+   * `true` ise uzak sağlayıcı için API anahtarı gerekiyor ve kayıtlı anahtar
+   * yok — geçiş YAPILMADI. Arayüz parola alanını açıp tekrar göndermelidir.
+   */
+  apiKeyRequired?: boolean;
+  /** Geçiş yapıldıysa etkin uç nokta (anahtar içermez). */
+  baseUrl?: string;
+  persisted?: boolean;
+  persistError?: string;
   persistHint?: string;
   error?: string;
 }
@@ -316,6 +371,17 @@ export interface DijiAPI {
   getModels(): Promise<ModelCatalog>;
   /** Model değiştir (`POST /models/select`). */
   selectModel(kind: ModelKind, id: string): Promise<ModelSelectResult>;
+  /**
+   * LLM sağlayıcısını değiştir (`POST /llm/provider`).
+   *
+   * Uzak sağlayıcı ilk kez seçilirken `apiKey` zorunludur; verilmezse yanıt
+   * `apiKeyRequired: true` olur ve geçiş YAPILMAZ. Anahtar yalnızca 0600
+   * izinli `~/.config/diji/secrets/deepseek.key` dosyasına yazılır.
+   */
+  selectLlmProvider(
+    provider: LlmProviderId,
+    apiKey?: string,
+  ): Promise<LlmProviderSelectResult>;
   /** Başlık çubuğundaki pencere düğmeleri (küçült / büyüt / kapat). */
   windowControls: WindowControls;
   /** SSE telemetri aboneliği; kaldırma fonksiyonu döner. */

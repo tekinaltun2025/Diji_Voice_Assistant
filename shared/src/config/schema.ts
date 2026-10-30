@@ -67,12 +67,18 @@ export const AgentConfigSchema = z.object({
     bridgePath: z.string().optional(),
   }),
   llm: z.object({
-    provider: z.literal('ollama'),
+    // `local` = bu makinedeki OpenAI uyumlu yonlendirici, `deepseek` = uzak API.
+    provider: z.union([z.literal('local'), z.literal('deepseek')]),
     baseUrl: z.string().min(1),
     model: z.string().min(1),
     temperature: z.number().min(0).max(2),
     maxTokens: z.number().positive(),
     apiKey: z.string().optional(),
+    /**
+     * Uzak saglayici anahtarinin okunacagi 0600 izinli dosya. Anahtar
+     * `~/.config/diji/env` icine YAZILMAZ (paylasilan/yedeklenen dosya).
+     */
+    apiKeyFile: z.string().optional(),
     timeoutMs: z.number().int().positive().optional(),
     /** Reasoning modelleri icin ek token rezervi (0 = rezerv yok). */
     reasoningReserve: z.number().int().min(0).optional(),

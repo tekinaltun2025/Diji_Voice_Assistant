@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { AgentConfig } from '../types/agent';
 import type { TTSConfig } from '../types/voice';
 
@@ -81,21 +83,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
     },
   },
   tts: buildTtsDefaults(),
-  llm: {
-    provider: 'ollama',
-    baseUrl: process.env.DIJI_LLM_BASE_URL || 'http://127.0.0.1:8000/v1',
-    model: process.env.DIJI_LLM_MODEL || 'agent',
-    apiKey: process.env.DIJI_LLM_API_KEY || 'sk-local',
-    temperature: Number(process.env.DIJI_LLM_TEMPERATURE || 0.7),
-    maxTokens: Number(process.env.DIJI_LLM_MAX_TOKENS || 1024),
-    timeoutMs: Number(process.env.DIJI_LLM_TIMEOUT_MS || 120000),
-    // `agent` bir hibrit reasoning modelidir: yanit oncesi uzun dusunme metni
-    // uretir (~1.500 token) ve bu metin max_tokens butcesinden duser. Rezerv
-    // olmadan yanit BOS doner. Ancak rezerv cok buyuk olursa model DAHA UZUN
-    // dusunur (olculdu: 4256 token butce -> 91 sn). 1024 rezerv, 2048 mutlak
-    // tavanla birlikte dengeli calisir. Reasoning kullanmayan modeller: 0.
-    reasoningReserve: Number(process.env.DIJI_LLM_REASONING_RESERVE || 1024),
-  },
+  llm: buildLlmDefaults(),
   vad: {
     provider: 'silero',
     threshold: Number(process.env.DIJI_VAD_THRESHOLD || 0.5),
@@ -119,6 +107,121 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
     },
   },
 };
+
+/**
+ * LLM saglayici tanimlari.
+ *
+ * Neden tablo: saglayici degistiginde `baseUrl` + `model` + `apiKey`
+ * BIRLIKTE degismeli. Kullanici yalnizca "DeepSeek" secince geriye
+ * `baseUrl`/`model` alanlarini elle doldurmak zorunda kalirdi ki bu da
+ * pratikte yanlis yapilandirmaya (orn. yerel adrese DeepSeek anahtari
+ * gonderme) yol acar.
+ */
+export interface LlmProviderPreset {
+  id: 'local' | 'deepseek';
+  label: string;
+  baseUrl: string;
+  /** Uzak saglayici icin onerilen model; `null` ise katalog listesinden secilir. */
+  defaultModel: string | null;
+  /** Anahtar zorunlu mu? Arayuz buna gore alan acar. */
+  requiresApiKey: boolean;
+  /** Anahtarin tutuldugu dosya (yalnizca `requiresApiKey` ise). */
+  apiKeyFile?: string;
+}
+
+/**
+ * DeepSeek uc noktasi.
+ *
+ * Kullanicinin verdigi `https://api.v1.deepseek.com` adresi DNS'te
+ * COZUMLENMIYOR (curl: HTTP 000). Dogrulanan calisan adres
+ * `https://api.deepseek.com`; OpenAI uyumlu yol `/v1` ile tamamlanir.
+ * Yanlis adres girilirse ajan acilista LLM'e hic baglanamaz.
+ */
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
+
+/** DeepSeek anahtarinin tutuldugu dosya (0600, yalnizca kullanici okur). */
+export function deepseekKeyFile(): string {
+  return path.join(os.homedir(), '.config', 'diji', 'secrets', 'deepseek.key');
+}
+
+export const LLM_PROVIDER_PRESETS: LlmProviderPreset[] = [
+  {
+    id: 'local',
+    label: 'Yerel yönlendirici (127.0.0.1)',
+    baseUrl: 'http://127.0.0.1:8000/v1',
+    defaultModel: 'agent',
+    requiresApiKey: false,
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek (uzak API)',
+    baseUrl: DEEPSEEK_BASE_URL,
+    // Dogrulanan kimlik: `/v1/models` -> deepseek-flash (DeepSeek-V4.1-Flash).
+    defaultModel: 'deepseek-flash',
+    requiresApiKey: true,
+    apiKeyFile: deepseekKeyFile(),
+  },
+];
+
+/** Secili saglayicinin presetini dondurur; bilinmeyen deger yerel sayilir. */
+export function llmProviderPreset(id: string | undefined): LlmProviderPreset {
+  return (
+    LLM_PROVIDER_PRESETS.find((preset) => preset.id === id) ?? LLM_PROVIDER_PRESETS[0]
+  );
+}
+
+/**
+ * LLM varsayilanlarini olusturur.
+ *
+ * Oncelik: saglayici secimi env'den (`DIJI_LLM_PROVIDER`). `deepseek` ise
+ * `baseUrl`/`model`/`apiKeyFile` preset'ten gelir; aksi halde yerel
+ * varsayilanlar (ve `DIJI_LLM_*` ile tek tek ezme) gecerli olur.
+ */
+function buildLlmDefaults(): AgentConfig['llm'] {
+  /*
+   * DIKKAT — `LLM_PROVIDER_PRESETS` burada KULLANILAMAZ.
+   *
+   * Bu fonksiyon `DEFAULT_AGENT_CONFIG` olusturulurken (dosyanin basinda)
+   * cagrilir; tablo ise dosyanin ALTINDA tanimli. `const` bildirimleri
+   * "temporal dead zone"a tabidir, yani buradan erisim acilista
+   *   `TypeError: Cannot read properties of undefined (reading 'find')`
+   * hatasi verir — canli calistirmada tam olarak bu yasandi.
+   *
+   * Bu yuzden gerekli degerler burada DOGRUDAN hesaplanir. Tablo yalnizca
+   * arayuzun (`model-catalog.ts`) kullandigi bir sunum kaynagidir.
+   * `deepseekKeyFile()` bir fonksiyon BILDIRIMI oldugu icin hosisteddir
+   * (TDZ'ye tabi degil) ve buradan guvenle cagrilabilir.
+   */
+  const remote = process.env.DIJI_LLM_PROVIDER === 'deepseek';
+
+  // Reasoning rezervi: iki saglayicinin modelleri de hibrit reasoning
+  // kullaniyor. DeepSeek olcumu (`deepseek-flash`, max_tokens=40):
+  // `content: ""`, `reasoning_content` dolu, `finish_reason: "length"`.
+  // Rezerv olmadan asistan HICBIR SEY SOYLEMEZ.
+  return {
+    provider: remote ? 'deepseek' : 'local',
+    baseUrl:
+      process.env.DIJI_LLM_BASE_URL ||
+      (remote ? 'https://api.deepseek.com/v1' : 'http://127.0.0.1:8000/v1'),
+    model:
+      process.env.DIJI_LLM_MODEL ||
+      (remote ? 'deepseek-flash' : 'agent'),
+    // Uzak saglayicida anahtar dosyadan okunur; yerelde yerel bir yer tutucu.
+    apiKey: process.env.DIJI_LLM_API_KEY || (remote ? '' : 'sk-local'),
+    ...(remote ? { apiKeyFile: deepseekKeyFile() } : {}),
+    temperature: Number(process.env.DIJI_LLM_TEMPERATURE || 0.7),
+    maxTokens: Number(process.env.DIJI_LLM_MAX_TOKENS || 1024),
+    timeoutMs: Number(process.env.DIJI_LLM_TIMEOUT_MS || 120000),
+    /*
+     * `agent` bir hibrit reasoning modelidir: yanit oncesi uzun dusunme metni
+     * uretir (~1.500 token) ve bu metin max_tokens butcesinden duser. Rezerv
+     * olmadan yanit BOS doner. Ancak rezerv cok buyuk olursa model DAHA UZUN
+     * dusunur (olculdu: 4256 token butce -> 91 sn). 1024 rezerv, 2048 mutlak
+     * tavanla birlikte dengeli calisir. Reasoning kullanmayan modeller: 0.
+     */
+    reasoningReserve: Number(process.env.DIJI_LLM_REASONING_RESERVE || 1024),
+  };
+}
 
 /**
  * TTS varsayilanlarini olusturur.

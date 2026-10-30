@@ -18,6 +18,8 @@ import type {
   ConnectionStatus,
   ConversationItem,
   DijiAPI,
+  LlmProviderId,
+  LlmProviderSelectResult,
   LogLine,
   McpServerStatus,
   ModelCatalog,
@@ -100,6 +102,16 @@ export interface UseAgentResult {
   loadModels: () => Promise<ModelCatalog | null>;
   /** Model değiştirir; başarılıysa `ok:true` döner ve katalog tazelenir. */
   selectModel: (kind: ModelKind, id: string) => Promise<ModelSelectResult>;
+  /**
+   * LLM sağlayıcısını değiştirir (yerel ↔ DeepSeek).
+   *
+   * Uzak sağlayıcı ilk kez seçilirken `apiKey` zorunludur; verilmezse sonuç
+   * `apiKeyRequired:true` olur ve geçiş yapılmaz (arayüz anahtar sorar).
+   */
+  selectLlmProvider: (
+    provider: LlmProviderId,
+    apiKey?: string,
+  ) => Promise<LlmProviderSelectResult>;
   /** Metin sorusu gönderir (yanıt metni SSE'den gelir). */
   ask: (text: string) => Promise<void>;
   /** Ajan mikrofonunu aç/kapat. */
@@ -426,6 +438,38 @@ export function useAgent(): UseAgentResult {
     [loadModels]
   );
 
+  /**
+   * LLM sağlayıcısını değiştirir (yerel ↔ DeepSeek).
+   *
+   * `modelSwitching` "llm" olarak işaretlenir: geçiş sırasında `/v1/models`
+   * doğrulaması ve sağlık kontrolü yapılır, panel bu sırada kilitlenir.
+   *
+   * Başarılı geçişten sonra katalog TAZELENİR — `llmProvider.current` ve
+   * `llm.current` çalışan motordan okunur, dolayısıyla panel yeni sağlayıcıyı
+   * ve modelini gösterir. İptal edilen (anahtar eksik) istekte tazeleme
+   * yapılmaz: hiçbir şey değişmemiştir.
+   */
+  const selectLlmProvider = useCallback(
+    async (
+      provider: LlmProviderId,
+      apiKey?: string,
+    ): Promise<LlmProviderSelectResult> => {
+      const bridge = bridgeRef.current;
+      if (!bridge) return { ok: false, reason: "Ajan köprüsü yok" };
+      setModelSwitching("llm");
+      try {
+        const result = await bridge.selectLlmProvider(provider, apiKey);
+        if (result?.ok) await loadModels();
+        return result ?? { ok: false, reason: "Yanıt alınamadı" };
+      } catch (error) {
+        return { ok: false, reason: (error as Error).message };
+      } finally {
+        if (mountedRef.current) setModelSwitching(null);
+      }
+    },
+    [loadModels]
+  );
+
 
   const micLevel = useMemo(() => {
     // `mic` aşaması gerçek RMS'i saniyede ~2 kez yayınlar (ölçüldü: 22 sn'de 49
@@ -479,6 +523,7 @@ export function useAgent(): UseAgentResult {
     modelSwitching,
     loadModels,
     selectModel,
+    selectLlmProvider,
     ask,
     toggleListen,
     toggleTts,

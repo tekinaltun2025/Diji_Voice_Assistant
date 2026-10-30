@@ -452,6 +452,56 @@ export function startControlServer(
       return;
     }
 
+    /**
+     * LLM sağlayıcısı değiştirme: `POST /llm/provider { provider, apiKey? }`
+     *
+     * `provider`: `local` | `deepseek`. Uzak sağlayıcı için `apiKey` ZORUNLUDUR
+     * (daha önce kaydedilmişse istekte göndermek gerekmez).
+     *
+     * Neden `/models/select`'ten ayrı: sağlayıcı değişimi `baseUrl` + `apiKey`
+     * + `model` alanlarını BİRLİKTE değiştirir. Tek bir model listesine
+     * sıkıştırmak, kullanıcının yerel sunucuya `deepseek-flash` göndermesi
+     * gibi sessiz hatalara yol açardı.
+     *
+     * Yanıt: `{ ok, current?, reason?, apiKeyRequired?, baseUrl?, persisted? }`.
+     * `apiKeyRequired: true` → arayüz anahtar alanını açar ve geçiş YAPILMAZ.
+     * Anahtar YALNIZCA `~/.config/diji/secrets/<provider>.key` dosyasına
+     * yazılır (0600); `~/.config/diji/env` içine asla yazılmaz.
+     */
+    if (req.method === 'POST' && path === '/llm/provider') {
+      void readBody(req).then(async (body) => {
+        const p = getPipeline();
+        if (!p) {
+          send(res, 503, { ok: false, error: 'ajan hazır değil' });
+          return;
+        }
+
+        const provider = String(body.provider ?? '').trim();
+        if (provider !== 'local' && provider !== 'deepseek') {
+          send(res, 400, { ok: false, error: 'provider local|deepseek olmalı' });
+          return;
+        }
+
+        // Boş dize "anahtar verilmedi" demektir; kayıtlı anahtar kullanılır.
+        const apiKey = typeof body.apiKey === 'string' ? body.apiKey : undefined;
+
+        const result = await p.selectLlmProvider(provider, apiKey);
+
+        const persistHint = result.ok
+          ? result.persisted
+            ? 'Sağlayıcı kalıcı kaydedildi (~/.config/diji/env)'
+            : result.persistError
+              ? `Kalıcı kaydedilemedi: ${result.persistError}`
+              : 'Sağlayıcı yalnızca bu oturum için geçerli'
+          : undefined;
+
+        // 400 = eksik/geçersiz girdi (anahtar yok), 409 = doğrulama başarısız.
+        const status = result.ok ? 200 : result.apiKeyRequired ? 400 : 409;
+        send(res, status, { ...result, ...(persistHint ? { persistHint } : {}) });
+      });
+      return;
+    }
+
     if (req.method === 'POST' && path === '/bargein') {
       const p = getPipeline();
       if (p) p.handleBargeIn();

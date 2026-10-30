@@ -25,7 +25,13 @@
     "ignoreDeprecations": "5.0",
     "tsBuildInfoFile": ".tsbuildinfo"
   },
-  "exclude": ["node_modules", "dist", "build", ".turbo", "ui", "ui/**"],
+  /*
+   * `ui-app` de haric tutulur: kendi Vite/`tsc --noEmit` zinciriyle derlenir
+   * ve DOM/JSX lib'lerine ihtiyac duyar. Kok `tsc -b` bu projeyi dahil ederse
+   * 600'den fazla yanlis hata uretir ve `ui-app/src` altina `.js`/`.d.ts`
+   * cop dosyalari yazar.
+   */
+  "exclude": ["node_modules", "dist", "build", ".turbo", "ui", "ui/**", "ui-app", "ui-app/**"],
   "references": [
     { "path": "./shared" },
     { "path": "./agent" },

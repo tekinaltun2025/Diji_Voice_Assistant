@@ -1,6 +1,7 @@
 import {
   AgentConfig,
   AgentMessage,
+  llmProviderPreset,
   logDebug,
   logError,
   logger,
@@ -26,10 +27,11 @@ import {
 } from './audio-io';
 import { LLMEngine, LLMMessage, LLMResponse, LLMStreamChunk, LLMTool } from './llm';
 import { MCPClient, VoiceConfirmationRequest } from './mcp-client';
-import { writeEnvVars } from './env-prefs';
+import { readApiKeyFile, writeApiKeyFile, writeEnvVars } from './env-prefs';
 import {
   assertModelSelectable,
   buildModelCatalog,
+  scanLlmModels,
   type ModelCatalog,
   type ModelKind,
 } from './model-catalog';
@@ -64,6 +66,33 @@ import {
  * süreç yeniden başlatılmak zorunda kalmaz (`process.env` çalışan bir Node
  * sürecinde dışarıdan değiştirilemez).
  */
+/**
+ * MCP araç adını sağlayıcı-güvenli biçime indirger.
+ *
+ * OpenAI uyumlu katı sağlayıcılar (DeepSeek dahil) araç adında yalnızca
+ * `^[a-zA-Z0-9_-]+$` kabul eder. MCP araç adları ise `sunucu.arac` biçiminde
+ * sunuluyordu ve nokta bu kalıbı bozuyordu — canlı doğrulamada her tur
+ * `400 Bad Request: Invalid 'tools[0].function.name'` ile düşüyordu.
+ */
+function sanitizeToolPart(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * `sunucu` + `arac` → `sunucu__arac`.
+ *
+ * Çift alt çizgi ayırıcıdır: tek alt çizgi araç adlarının kendisinde
+ * bulunabildiği için (`list_channels`) belirsizlik yaratırdı.
+ */
+function mcpToolName(server: string, tool: string): string {
+  const s = sanitizeToolPart(server) || 'server';
+  const t = sanitizeToolPart(tool) || 'tool';
+  return `${s}__${t}`;
+}
+
 function ttsDisabled(pipeline?: VoicePipeline): boolean {
   const override = pipeline?.getTtsOverride();
   if (override !== null && override !== undefined) return !override;
@@ -360,7 +389,34 @@ export class VoicePipeline {
   }
 
   private async initializeEngines(): Promise<void> {
-    const llmConfig = this.config.llm;
+    /*
+     * Anahtar cozumlemesi AÇILIŞTA yapilir.
+     *
+     * `buildLlmDefaults()` uzak saglayicida `apiKey: ''` birakir — anahtar
+     * `~/.config/diji/env` icine YAZILMAZ. Anahtar 0600 izinli ayri dosyada
+     * durur. Burada okunmazsa, DeepSeek secili olarak yeniden baslatilan ajan
+     * her turda 401 alirdi. Cozumleme sirasi:
+     *   1. `config.llm.apiKey` (env'den acikca verilmisse)
+     *   2. `process.env.DIJI_LLM_API_KEY`
+     *   3. `apiKeyFile` (0600 ayri dosya)
+     */
+    const llmConfig = { ...this.config.llm };
+    if (!(llmConfig.apiKey ?? '').trim()) {
+      const fromEnv = (process.env.DIJI_LLM_API_KEY ?? '').trim();
+      // Dosya YALNIZCA uzak saglayicida okunur: yerel saglayici anahtar
+      // istemez ve `secrets/deepseek.key` yerel istege sizmamalidir.
+      const fromFile =
+        llmConfig.provider === 'deepseek' && llmConfig.apiKeyFile
+          ? readApiKeyFile(llmConfig.provider)
+          : '';
+      llmConfig.apiKey = fromEnv || fromFile;
+      if (!llmConfig.apiKey && llmConfig.provider === 'deepseek') {
+        logWarn('DeepSeek secili ama API anahtari yok — Ayarlar ekranindan girin', {
+          apiKeyFile: llmConfig.apiKeyFile,
+        });
+      }
+    }
+
     const sttConfig = this.config.stt as unknown as STTConfig;
     const ttsConfig = this.config.tts as TTSConfig;
     const vadConfig = this.config.vad as VADConfig;
@@ -1169,13 +1225,20 @@ KURALLAR:
     return tools.map((tool) => ({
       type: 'function',
       function: {
-        // LLM'e araç adı MUTLAKA `sunucu.arac` biçiminde sunulur.
+        // LLM'e araç adı MUTLAKA `sunucu__arac` biçiminde sunulur.
         //
-        // NEDEN: `handleMCPToolCalls()` sunucuyu bu öneke göre çözer. Ön ek
-        // olmadan model `list_channels` döndürüyor, ajan bunu sunucu adı sanıp
-        // "MCP sunucusu bulunamadi" hatası veriyordu (canlı logda görüldü).
-        // Ad ayrıca iki farklı sunucudaki aynı araç adını çakışmaktan korur.
-        name: `${tool.server}.${tool.name}`,
+        // NEDEN ön ek: `handleMCPToolCalls()` sunucuyu bu öneke göre çözer.
+        // Ön ek olmadan model `list_channels` döndürüyor, ajan bunu sunucu adı
+        // sanıp "MCP sunucusu bulunamadi" hatası veriyordu (canlı logda
+        // görüldü). Ad ayrıca iki farklı sunucudaki aynı araç adını
+        // çakışmaktan korur.
+        //
+        // NEDEN `__` ve sanitize: OpenAI uyumlu katı sağlayıcılar araç adında
+        // yalnızca `^[a-zA-Z0-9_-]+$` kabul eder. Nokta içeren `sunucu.arac`
+        // biçimi DeepSeek'te her turu 400 ile bozuyordu (canlı logda görüldü:
+        // "Invalid 'tools[0].function.name'"). Bu yüzden hem ayırıcı `__`
+        // yapıldı hem de parçalar bu karakter kümesine indirgendi.
+        name: mcpToolName(tool.server, tool.name),
         description: tool.description,
         parameters: tool.inputSchema,
       },
@@ -1196,19 +1259,39 @@ KURALLAR:
     const requested = String(name ?? '').trim();
     if (!requested) return null;
 
-    const dot = requested.indexOf('.');
-    if (dot > 0 && dot < requested.length - 1) {
-      const server = requested.slice(0, dot);
-      const tool = requested.slice(dot + 1);
-      if (this.mcpClient.getServer(server as never)?.tools.some((t) => t.name === tool)) {
-        return { server, tool };
-      }
+    // Tam eşleşme en güvenilir yol: adı biz ürettiysek (sanitize edilmiş
+    // `sunucu__arac`) geri çözmek için tahmin yürütmeye gerek yok.
+    const exact = this.mcpClient
+      .getAllTools()
+      .find((tool) => mcpToolName(tool.server, tool.name) === requested);
+    if (exact) return { server: exact.server, tool: exact.name };
+
+    // Ayırıcıyı çöz: `__` (güncel biçim) veya `.` (eski biçim / model kendi
+    // ürettiyse). Parçalar da sanitize edilerek karşılaştırılır.
+    for (const separator of ['__', '.']) {
+      const at = requested.indexOf(separator);
+      if (at <= 0 || at >= requested.length - separator.length) continue;
+      const server = requested.slice(0, at);
+      const tool = requested.slice(at + separator.length);
+      const found = this.mcpClient
+        .getAllTools()
+        .find(
+          (candidate) =>
+            sanitizeToolPart(candidate.server) === server &&
+            sanitizeToolPart(candidate.name) === tool
+        );
+      if (found) return { server: found.server, tool: found.name };
     }
 
     // Ön ek yok (veya yanlış): araç adını tüm sunucularda ara.
     const matches = this.mcpClient
       .getAllTools()
-      .filter((tool) => tool.name === requested || `${tool.server}.${tool.name}` === requested);
+      .filter(
+        (tool) =>
+          tool.name === requested ||
+          `${tool.server}.${tool.name}` === requested ||
+          mcpToolName(tool.server, tool.name) === requested
+      );
 
     if (matches.length === 1) {
       const only = matches[0];
@@ -1670,15 +1753,184 @@ KURALLAR:
     const llmCurrent = this.llmEngine?.getModelName() ?? this.effectiveLlmModel();
     const ttsCurrent = this.effectiveTtsModel();
 
+    // Etkin uc nokta MOTORDAN okunur (yapilandirmadan degil): saglayici
+    // degistiginde `config.llm.baseUrl` eski degeri tasimaya devam eder.
+    const llmBaseUrl = this.llmEngine?.getBaseUrl() ?? this.config.llm.baseUrl;
+    const llmProvider = this.effectiveLlmProvider();
+
     return buildModelCatalog({
       modelsDir: this.config.stt.modelPath,
       sttCurrent,
       sttPriority: this.sttPriority(),
       ttsCurrent,
-      llmBaseUrl: this.config.llm.baseUrl,
-      llmApiKey: this.config.llm.apiKey ?? '',
+      // Katalog, ETKIN saglayicinin anahtariyla sorgulanir. Yanlis anahtar
+      // gondermek uzak API'de 401, yerelde ise gereksiz baslik uretirdi.
+      llmApiKey: this.apiKeyFor(llmProvider),
+      llmBaseUrl,
       llmCurrent,
+      llmProvider,
     });
+  }
+
+  /**
+   * Etkin LLM saglayicisi.
+   *
+   * Oncelik MOTORDADIR: `setProvider` basarisiz olursa motor eski uc noktada
+   * kalir; arayuzun "secili" isaretini yapilandirmaya gore koymak yaniltıcı
+   * olurdu.
+   */
+  private effectiveLlmProvider(): 'local' | 'deepseek' {
+    const fromEngine = this.llmEngine?.getBaseUrl();
+    if (fromEngine) {
+      return fromEngine.includes('deepseek.com') ? 'deepseek' : 'local';
+    }
+    return this.config.llm.provider === 'deepseek' ? 'deepseek' : 'local';
+  }
+
+  /**
+   * Verilen saglayici icin kullanilacak anahtar.
+   *
+   * Yerel saglayici anahtar istemez; `sk-local` gibi bir yer tutucu doner.
+   * Uzak saglayici icin once `DIJI_LLM_API_KEY`, sonra 0600 izinli ayri
+   * dosya (`~/.config/diji/secrets/deepseek.key`) okunur.
+   */
+  private apiKeyFor(provider: 'local' | 'deepseek'): string {
+    if (provider === 'local') {
+      const local = (this.config.llm.apiKey ?? '').trim();
+      return local || 'sk-local';
+    }
+    const fromEnv = (process.env.DIJI_LLM_API_KEY ?? '').trim();
+    if (fromEnv) return fromEnv;
+    return readApiKeyFile(provider);
+  }
+
+  /**
+   * Ayarlar ekranindan LLM SAGLAYICISINI degistirir (yerel ↔ DeepSeek).
+   *
+   * Neden model seciminden ayri: saglayici degisimi `baseUrl` ve `apiKey`
+   * alanlarini da degistirir. Tek bir "model" listesinde karistirmak,
+   * kullanicinin yerel sunucuya `deepseek-flash` adi gondermesi gibi sessiz
+   * hatalara yol acardi.
+   *
+   * Guvenlik kurali: uzak saglayici secildiginde anahtar YOKSA gecis
+   * YAPILMAZ — `apiKeyRequired: true` doner ve arayuz anahtar alanini acar.
+   * Anahtar olmadan gecmek her turu 401 ile bozardi.
+   */
+  async selectLlmProvider(
+    provider: 'local' | 'deepseek',
+    apiKey?: string
+  ): Promise<{
+    ok: boolean;
+    current?: 'local' | 'deepseek';
+    reason?: string;
+    /** Uzak saglayici icin anahtar gerekiyor ve yok. */
+    apiKeyRequired?: boolean;
+    /** Gecis yapildiysa etkin uc nokta (anahtar icermez). */
+    baseUrl?: string;
+    persisted?: boolean;
+    persistError?: string;
+  }> {
+    if (this.isModelSwitching) {
+      return { ok: false, reason: 'Başka bir model değişimi sürüyor' };
+    }
+
+    const preset = llmProviderPreset(provider);
+    if (!preset) return { ok: false, reason: `Bilinmeyen sağlayıcı: ${provider}` };
+
+    // Anahtar: istekte verilen > kayitli dosya.
+    const provided = String(apiKey ?? '').trim();
+    const effectiveKey = preset.requiresApiKey
+      ? provided || readApiKeyFile(preset.id)
+      : this.apiKeyFor('local');
+
+    if (preset.requiresApiKey && !effectiveKey) {
+      return {
+        ok: false,
+        current: this.effectiveLlmProvider(),
+        apiKeyRequired: true,
+        reason: `${preset.label} için API anahtarı gerekli`,
+      };
+    }
+
+    if (!this.llmEngine) return { ok: false, reason: 'LLM motoru hazır değil' };
+
+    this.isModelSwitching = true;
+    try {
+      // Once anahtar kalici yazilir: `setProvider` dogrulamasi ANAHTARI
+      // kullanacagi icin dosyanin once hazir olmasi gerekir. Dogrulama
+      // basarisiz olursa anahtar geri alinir (asagida).
+      const previousKey = readApiKeyFile(preset.id);
+      let keyWritten = false;
+      if (preset.requiresApiKey && provided) {
+        const written = writeApiKeyFile(preset.id, provided);
+        if (!written.ok) {
+          return {
+            ok: false,
+            reason: `API anahtarı yazılamadı: ${written.error ?? 'bilinmeyen hata'}`,
+          };
+        }
+        keyWritten = true;
+      }
+
+      let model = preset.defaultModel ?? this.config.llm.model;
+      // Uzak saglayicida model listesi dogrulanir: yanlis model adi her turu
+      // bos yanita cevirirdi. Ulasilamazsa onerilen adla devam edilir.
+      if (preset.requiresApiKey) {
+        const offered = await scanLlmModels(preset.baseUrl, effectiveKey, model);
+        const usable = offered.filter((option) => option.available);
+        if (usable.length > 0 && !usable.some((option) => option.id === model)) {
+          model = usable[0].id;
+        }
+      }
+
+      try {
+        await this.llmEngine.setProvider({
+          baseUrl: preset.baseUrl,
+          model,
+          apiKey: effectiveKey,
+        });
+      } catch (error) {
+        // Dogrulama basarisiz: yazilan anahtari geri al (kullanici yanlis
+        // anahtar girdiyse dosyada kalmasin).
+        if (keyWritten) writeApiKeyFile(preset.id, previousKey);
+        return {
+          ok: false,
+          current: this.effectiveLlmProvider(),
+          reason: `Sağlayıcıya ulaşılamadı: ${(error as Error).message}`,
+        };
+      }
+
+      this.config.llm.provider = preset.id;
+      this.config.llm.baseUrl = preset.baseUrl;
+      this.config.llm.model = model;
+      this.modelOverride.llm = model;
+
+      telemetry.log('info', 'llm', `sağlayıcı: ${preset.label} (${model})`);
+      this.emit('model-change', {
+        kind: 'llm',
+        model,
+        provider: preset.id,
+        sessionId: this.sessionId,
+      });
+
+      // Kalicilik: saglayici + model birlikte yazilir. `DIJI_LLM_BASE_URL`
+      // YAZILMAZ; preset zaten dogru adresi tasir ve kullanici elle farkli
+      // bir adres girmisse onu ezmek istemeyiz.
+      const world = writeEnvVars({
+        DIJI_LLM_PROVIDER: preset.id,
+        ...(preset.id === 'deepseek' ? { DIJI_LLM_MODEL: model } : {}),
+      });
+
+      return {
+        ok: true,
+        current: preset.id,
+        baseUrl: preset.baseUrl,
+        persisted: world.ok,
+        persistError: world.ok ? undefined : world.error,
+      };
+    } finally {
+      this.isModelSwitching = false;
+    }
   }
 
   /** STT'nin diskte arayacağı ön ek sırası (`stt.ts` ile aynı kural). */
