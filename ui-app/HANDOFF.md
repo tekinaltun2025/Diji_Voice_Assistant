@@ -1,66 +1,81 @@
-# Jarvis — Devir Teslim Notu (HANDOFF)
+# Diji — Handoff Note
 
-Jarvis, tarayıcıda ve Ubuntu masaüstünde çalışan **Türkçe sesli asistan arayüzü**dür.
-Bu paket, projenin temiz kaynak kodunu (bağımlılıklar ve derleme çıktıları hariç) içerir.
+Diji is a **Turkish voice-assistant interface** that runs in the browser and on
+the Ubuntu desktop. This package contains the clean source code of the project
+(without dependencies or build output).
 
-## Proje ne yapar?
+> [!NOTE]
+> This note carries the historical "Jarvis" naming used during the design
+> migration. The shipping product name is **Diji**; the packaging artefact names
+> still say Jarvis.
 
-- **Web arayüzü:** Tek sayfa; mikrofona tepki veren "Kuantum Cam" ses formu, sohbet ekranı,
-  yandan açılır geçmiş, sistem göstergeleri (CPU/RAM/VRAM/kablosuz — **örnek veri**).
-- **Sohbet geçmişi** tarayıcı depolamasında (localStorage) tutulur; hesap veya sunucu gerekmez.
-- **Gerçek AI bağlantısı yoktur:** bu bir arayüz/tasarım teslimi; mesaj gönderimi yalnızca
-  yerel olarak kaydedilir, yapay zekâ yanıtı üretilmez.
-- **Mikrofon** yalnızca ses formunu hareketlendirmek için kullanılır; ses kaydedilmez,
-  sunucuya gönderilmez, konuşma tanıma yapılmaz.
+## What does the project do?
 
-## Klasör yapısı
+- **Web UI:** a single page with the "Quantum Glass" audio form that reacts to
+  the microphone, the chat screen, a slide-out history drawer, and system
+  indicators (CPU/RAM/VRAM/wireless — **sample data**).
+- **Chat history** is kept in browser storage (`localStorage`); no account and no
+  server are required.
+- **There is no real AI connection in the standalone design package:** it is a
+  UI/design deliverable; sending a message only stores it locally and no
+  AI response is produced. The full application wires this to the agent — see
+  [`README.en.md`](README.en.md).
+- **The microphone** is used only to animate the audio form; audio is not
+  recorded, not sent to a server, and no speech recognition runs.
 
-| Yol | İçerik |
+## Folder structure
+
+| Path | Contents |
 | --- | --- |
-| `src/routes/index.tsx` | Tüm arayüz: widget, sohbet, geçmiş, göstergeler |
-| `src/components/quantum-wave.tsx` | Canvas 2D ses formu (mikrofon seviyesine tepki verir) |
-| `src/styles.css` | Tüm görsel tema (Tailwind v4 + özel CSS) |
-| `electron/main.cjs` | Electron ana süreci (`app://jarvis/` özel protokolü) |
-| `scripts/prepare-electron.cjs` | Electron için SPA kabuğu hazırlığı |
-| `tests/quantum_wave_browser.py` | Arayüz doğrulaması için Playwright betiği |
-| `AGENTS.md`, `roadmap.md` | Proje kararları ve görev geçmişi — okumadan değişiklik yapmayın |
+| `src/routes/index.tsx` | The whole interface: widget, chat, history, indicators |
+| `src/components/quantum-wave.tsx` | Canvas 2D audio form (reacts to the microphone level) |
+| `src/styles.css` | The entire visual theme (Tailwind v4 + custom CSS) |
+| `electron/main.cjs` | Electron main process (the `app://jarvis/` custom protocol) |
+| `scripts/prepare-electron.cjs` | Prepares the SPA shell for Electron |
+| `tests/quantum_wave_browser.py` | Playwright script for UI verification |
+| `AGENTS.md`, `roadmap.md` | Project decisions and task history — read before changing anything |
 
-## Kurulum ve çalıştırma
-
-```sh
-npm install          # veya bun install / pnpm install
-npm run dev          # geliştirme sunucusu (varsayılan http://localhost:8080)
-```
-
-Derleme (Node sunucusu, SSR):
+## Setup and running
 
 ```sh
-npm run build        # çıktı: .output (nitro node-server preset)
+npm install          # or bun install / pnpm install
+npm run dev          # dev server (default http://localhost:8080)
 ```
 
-Electron masaüstü paketi:
+Build (Node server, SSR):
 
 ```sh
-npx vite build -c vite.electron.config.ts   # SPA kabuğu (dist/client)
-node scripts/prepare-electron.cjs           # göreli yol düzeltmesi
-npx electron .                              # pencereyi açar
+npm run build        # output: .output (nitro node-server preset)
 ```
 
-Ubuntu'ya dağıtılabilir paket için `@electron/packager` kullanılabilir
-(bkz. `electron/README.md`).
+Electron desktop package:
 
-## Teknik özet
+```sh
+npx vite build -c vite.electron.config.ts   # SPA shell (dist/client)
+node scripts/prepare-electron.cjs           # relative-path rewrite
+npx electron .                              # opens the window
+```
 
-- **Dil/Ekosistem:** TypeScript, React 19, TanStack Start v1 (SSR + Vite 8), Tailwind CSS v4.
-- **Yönlendirme:** TanStack Router (`src/routes/`); `src/routeTree.gen.ts` otomatik üretilir,
-  elle düzenlemeyin.
-- **Derleme:** `nitro` (node-server preset) — dış sunucu/veritabanı bağlantısı yoktur.
-- **Durum:** yalnızca React state + localStorage; backend, kimlik doğrulama ve veritabanı yoktur.
+For a distributable Ubuntu package you can use `@electron/packager`
+(see `electron/README.md`).
 
-## Bilinen notlar
+## Technical summary
 
-- Bu paketteki `vite.config.ts` ve `vite.electron.config.ts`, Lovable'ın özel sarmalayıcı
-  paketi yerine **standart Vite eklentileriyle** yazılmıştır; derleme test edilmiştir.
-- Sistem göstergelerindeki değerler örnektir; tarayıcı Ubuntu donanım ölçümlerini okuyamaz.
-  Gerçek CPU/RAM ölçümü ayrı **Python** paketinde (psutil) yapılmaktadır.
-- `Alt+Space` kısayolu geçmiş panelini açar/kapatır.
+- **Language/ecosystem:** TypeScript, React 19, TanStack Start v1 (SSR + Vite 8),
+  Tailwind CSS v4.
+- **Routing:** TanStack Router (`src/routes/`); `src/routeTree.gen.ts` is generated
+  automatically — do not edit it by hand.
+- **Build:** `nitro` (node-server preset) — no external server or database
+  connection.
+- **State:** React state + `localStorage` only; no backend, no authentication and
+  no database.
+
+## Known notes
+
+- The `vite.config.ts` and `vite.electron.config.ts` in this package are written
+  with **standard Vite plugins** instead of Lovable's custom wrapper package; the
+  build has been tested.
+- The values in the system indicators are samples; a browser cannot read Ubuntu
+  hardware measurements. Real CPU/RAM measurement happens in a separate **Python**
+  package (psutil).
+- The `Alt+Space` shortcut opens/closes the history panel.
