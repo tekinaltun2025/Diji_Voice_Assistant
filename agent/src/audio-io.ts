@@ -87,6 +87,17 @@ export interface SpeakerOptions {
  */
 let aecInUse = false;
 
+/**
+ * `setup-aec.sh` tarafından ZORLANMIŞ (sessiz) düğümlerin işareti.
+ *
+ * NEDEN GEREKLİ: `support.null-audio-sink` tabanlı düğümler list-objects
+ * çıktısında gerçek `module-echo-cancel` düğümlerinden ayırt EDİLEMİYOR —
+ * adları da (`echo-cancel-*`) birebir aynı. Bu işaret, üreten tarafın
+ * bıraktığı tek güvenilir izdir ve bu dosya ile `setup-aec.sh` arasındaki
+ * sözleşmedir. İKİ YERDE BİRLİKTE DEĞİŞTİRİLMELİDİR.
+ */
+const SILENT_MARKER = 'diji-silent-forced';
+
 /** AEC kaynağı giriş cihazı olarak seçildi mi? */
 export function isAecInUse(): boolean {
   return aecInUse;
@@ -102,16 +113,65 @@ function detectAecNode(mediaClass: 'Audio/Source' | 'Audio/Sink'): string | null
       timeout: 2000,
     });
 
-    // Kayıtları nesne sınırında böl: her `id: N` yeni bir düğüm başlatır.
-    const blocks = dump.split(/\n(?=\s*id:\s*\d+)/);
+    /*
+     * NESNE SINIRI — ÖLÇÜLDÜ, TAHMİN DEĞİL.
+     *
+     * `pw-cli list-objects Node` kayıtları `id 30, type ...` biçiminde
+     * yazar (İKİ NOKTA YOK). Eski desen `id:\s*\d+` idi: hiçbir zaman
+     * eşleşmediği için çıktı TEK blok kalıyordu ve fonksiyon her çağrıda
+     * `null` dönüyordu. Yani AEC araması bu sistemde hiç çalışmamış.
+     * Ölçüm: eski desen 1 blok, yeni desen 14 blok.
+     */
+    const blocks = dump.split(/\n(?=\s*id\s+\d+[,:])/);
     for (const block of blocks) {
-      if (!block.includes(mediaClass)) continue;
+      /*
+       * TAM `media.class` EŞLEŞMESİ — `includes` YETMEZ.
+       *
+       * `Audio/Source` araması, `Audio/Source/Virtual` yazan bloğu da
+       * yakalar. `setup-aec.sh` zorlanmış düğümleri tam olarak
+       * `Audio/Source/Virtual` olarak oluşturuyor — yani `includes`
+       * kullanılsaydı sessiz düğüm "AEC kaynağı" sanılırdı.
+       */
+      const classMatch = block.match(/media\.class\s*=\s*"([^"]+)"/);
+      if (!classMatch || classMatch[1] !== mediaClass) continue;
+
       const nameMatch = block.match(/node\.name\s*=\s*"([^"]+)"/);
       if (!nameMatch) continue;
       const name = nameMatch[1];
       // echo-cancel düğümleri adında "echo" veya setup-aec.sh'de yazdığımız
       // "diji-aec" önekini taşır.
-      if (/echo|diji-aec/i.test(name)) return name;
+      if (!/echo|diji-aec/i.test(name)) continue;
+
+      /*
+       * SESSİZ DÜĞÜMLERİ ELE — BU BİR GÜVENLİK KONTROLÜDÜR.
+       *
+       * `setup-aec.sh` hedef düğümleri `support.null-audio-sink` tabanlı
+       * `adapter` factory'sinden zorluyor. Bu düğümler `list-objects`
+       * çıktısında GÖRÜNÜR ve adları `echo-cancel-*` ile eşleşir — ama
+       * SES ÜRETMEZLER. Ölçüldü (bu makine):
+       *   `arecord -D pipewire`                     → maksimum genlik 0
+       *   `pw-record --target echo-cancel-source`   → maksimum genlik 0
+       *
+       * Bunları AEC sanmak iki felakete yol açar:
+       *   - giriş: ajan SAĞIR olur (sessiz kaynaktan okur)
+       *   - çıkış: hoparlör SESSİZLEŞİR (ses sessiz havuza gider)
+       *
+       * NASIL AYIRT EDİLİR — TAHMİN DEĞİL, İŞARET:
+       * `factory.name` list-objects çıktısında YOK (yalnızca `factory.id`
+       * var) ve `factory.id`, `adapter` factory'sinde hem zorlanmış null
+       * düğümler hem de gerçek adapter düğümleri için aynı çıkıyor — yani
+       * factory üzerinden ayırt edilemiyor. `media.class` sonundaki
+       * `/Virtual` de yalnızca Source tarafında var; Sink tarafında yok
+       * (ölçüldü: `echo-cancel-sink` sade `Audio/Sink` olarak görünüyor).
+       *
+       * Bu yüzden ÜRETEN TARAF İŞARETLER: `setup-aec.sh` zorladığı
+       * düğümlerin `node.description` alanına [`SILENT_MARKER`] yazar.
+       * Tüketen taraf bu işareti görürse adayı REDDEDER. İşaret yoksa
+       * düğüm gerçek `module-echo-cancel` çıktısıdır ve kullanılabilir.
+       */
+      if (block.includes(SILENT_MARKER)) continue;
+
+      return name;
     }
   } catch (error) {
     // `pw-cli` yoksa veya PipeWire kapalıysa sessizce devam et: AEC isteğe

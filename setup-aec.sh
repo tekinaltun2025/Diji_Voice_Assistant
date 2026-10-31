@@ -111,8 +111,12 @@ force_virtual_nodes() {
 
   if node_named_present "echo-cancel-sink"; then
     log "echo-cancel-sink zaten var — atlandı (idempotent)"
+  # `node.description` içindeki "diji-silent-forced" İŞARETTİR, süs değil:
+  # bu düğümler null-audio-sink tabanlıdır ve SES ÜRETMEZ. Ajan tarafı
+  # (agent/src/audio-io.ts, SILENT_MARKER) bu işareti görüp adayı reddeder.
+  # Aksi halde mikrofon sessiz düğüme yönlenir ve ajan SAĞIR olur.
   elif pw-cli create-node adapter \
-    '{ factory.name=support.null-audio-sink node.name=echo-cancel-sink node.description="Echo Cancel Sink" media.class=Audio/Sink object.linger=true audio.position=[ FL FR ] }' \
+    '{ factory.name=support.null-audio-sink node.name=echo-cancel-sink node.description="Echo Cancel Sink (diji-silent-forced)" media.class=Audio/Sink object.linger=true audio.position=[ FL FR ] }' \
     >/dev/null 2>&1; then
     log "echo-cancel-sink oluşturuldu (zorlama)"
     created=1
@@ -123,7 +127,7 @@ force_virtual_nodes() {
   if node_named_present "echo-cancel-source"; then
     log "echo-cancel-source zaten var — atlandı (idempotent)"
   elif pw-cli create-node adapter \
-    '{ factory.name=support.null-audio-sink node.name=echo-cancel-source node.description="Echo Cancel Source" media.class=Audio/Source/Virtual object.linger=true audio.position=[ FL FR ] }' \
+    '{ factory.name=support.null-audio-sink node.name=echo-cancel-source node.description="Echo Cancel Source (diji-silent-forced)" media.class=Audio/Source/Virtual object.linger=true audio.position=[ FL FR ] }' \
     >/dev/null 2>&1; then
     log "echo-cancel-source oluşturuldu (zorlama)"
     created=1
