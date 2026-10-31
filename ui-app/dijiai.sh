@@ -42,8 +42,25 @@ fail() {
 log "DijiAI başlatıcı — kök: $APP_ROOT"
 
 # --------------------------------------------------------------- tek örnek
-# `pkill -f` kendini de eşleştirebildiği için tam yol deseni kullanılıyor.
-if pgrep -f "$APP_ROOT/electron/main.cjs" >/dev/null 2>&1; then
+# DIKKAT — desen GORELI olmali: `electron/main.cjs`.
+#
+# Electron'a betik yolu arguman olarak goreli veriliyor, dolayisiyla surecin
+# komut satiri
+#   .../dist/electron --no-sandbox --class=DijiAI electron/main.cjs
+# seklindedir — MUTLAK yol icermez. Eski desen `$APP_ROOT/electron/main.cjs`
+# hicbir zaman eslesmiyordu; canli dogrulamada tam olarak bu yasandi:
+# Electron aciliyordu, betik onu goremiyor ve 20 sn sonra
+# "Electron penceresi acilmadi" diyordu. Ayni desen tek-ornek kontrolunde de
+# yanlis oldugu icin acik bir pencere varken ikinci surec baslatiliyordu.
+#
+# `pgrep` kendi PID'ini zaten atlar; yine de `$$` acikca haric tutulur.
+electron_running() {
+  local pids
+  pids=$(pgrep -f 'electron/main\.cjs' 2>/dev/null | grep -v "^$$\$" || true)
+  [ -n "$pids" ]
+}
+
+if electron_running; then
   log "Zaten çalışıyor — yeni süreç açılmadı, pencere öne getiriliyor."
   command -v wmctrl >/dev/null 2>&1 && wmctrl -a "DijiAI" 2>/dev/null || true
   exit 0
@@ -101,14 +118,18 @@ log "Pencere açılıyor…"
 setsid nohup "$ELECTRON_BIN" electron/main.cjs \
   --no-sandbox --class=DijiAI >>"$LOG" 2>&1 </dev/null &
 
-# Sürecin gerçekten ayakta kaldığını doğrula (sessiz çöküşleri yakalar).
+# Surecin gercekten ayakta kaldigini dogrula (sessiz cokusleri yakalar).
+# Ayni goreli desen kullanilir — mutlak yol eslesmiyordu.
 for _ in $(seq 1 20); do
   sleep 1
-  if pgrep -f "$APP_ROOT/electron/main.cjs" >/dev/null 2>&1; then
-    log "Çalışıyor (PID $(pgrep -f "$APP_ROOT/electron/main.cjs" | head -1))."
+  if electron_running; then
+    log "Çalışıyor (PID $(pgrep -f 'electron/main\.cjs' | grep -v "^$$\$" | head -1))."
     exit 0
   fi
 done
 
+# Son care: surec adi desenden farkli olabilir; log'un son satirlarini tani.
 fail "Electron penceresi açılmadı.
-Günlük: $LOG"
+Günlük: $LOG
+Son satırlar:
+$(tail -n 5 "$LOG" 2>/dev/null)"
