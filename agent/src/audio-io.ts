@@ -40,6 +40,16 @@ export interface SpeakerOptions {
   /** `aplay` çalıştırılabilir dosyası. */
   binary?: string;
   /**
+   * Hoparlöre yazılan her PCM'i referans olarak bildirmek için geri çağrı.
+   *
+   * NEDEN: Yazılımsal yankı kapılaması (bkz. `echo-guard.ts`) "bu ses benim
+   * mi" sorusunu ancak hoparlöre GERÇEKTEN yazdığımız sinyali bilerek
+   * cevaplayabilir. Sabit genlik eşiği yanlış cevap verir. Bildirim tam
+   * olarak PCM'in `aplay`'e verildiği anda yapılır — böylece zaman damgası
+   * akustik gecikme penceresinin doğru ucuna düşer.
+   */
+  onReference?: (atMs: number, pcm: Buffer, sampleRate: number) => void;
+  /**
    * Varsayılan örnekleme frekansı (Hz). `play()` çağrısında açık bir
    * frekans verilmezse bu değer kullanılır.
    *
@@ -639,6 +649,10 @@ export class SpeakerOutput {
   private readonly defaultSampleRate: number;
   private writing: Promise<void> = Promise.resolve();
   private stopped: boolean = false;
+  /** Referans bildirimi geri çağrısı (yazılımsal AEC için). */
+  private readonly onReference:
+    | ((atMs: number, pcm: Buffer, sampleRate: number) => void)
+    | null;
 
   constructor(options: SpeakerOptions = {}) {
     /*
@@ -668,6 +682,7 @@ export class SpeakerOutput {
     }
     this.binary = options.binary || process.env.DIJI_APLAY_BIN || 'aplay';
     this.defaultSampleRate = options.sampleRate || AUDIO_SAMPLE_RATE;
+    this.onReference = options.onReference ?? null;
   }
 
   /**
@@ -705,6 +720,25 @@ export class SpeakerOutput {
       if (this.stopped) {
         resolve();
         return;
+      }
+
+      /*
+       * REFERANS BİLDİRİMİ — tam burada, `aplay` başlatılmadan hemen önce.
+       *
+       * Zamanlama kritik: yazılımsal yankı kapılaması bu zaman damgasını
+       * akustik gecikme penceresinin merkezi olarak kullanır. PCM'i kuyruğa
+       * `play()` içinde değil BURADA bildirmek gerekir; aksi halde kuyrukta
+       * bekleyen parçalar gelecekteki bir zamanla eşleşir ve referans
+       * pencereyi ıskalar.
+       */
+      if (this.onReference) {
+        try {
+          this.onReference(Date.now(), pcm, sampleRate);
+        } catch (error) {
+          // Referans bildirimi başarısız olsa bile ses ÇALINMALI.
+          // Teşhis katmanı asla ses yolunu kesmemelidir.
+          logDebug('Referans bildirimi hatasi', { error: (error as Error).message });
+        }
       }
 
       const args = [

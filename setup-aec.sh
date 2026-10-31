@@ -78,6 +78,64 @@ aec_node_present() {
   pw-cli list-objects Node 2>/dev/null | grep -qiE 'echo|diji-aec'
 }
 
+# Belirli bir düğüm adı grafikte var mı?
+#
+# NEDEN AYRI BİR FONKSİYON: `aec_node_present()` bilinçli olarak GEVŞEK bir
+# arama yapıyor ("echo" içeren herhangi bir düğüm). Zorlama adımında ise TAM
+# adı bilmemiz gerekir; aksi halde her çalıştırmada aynı adla ikinci bir düğüm
+# oluşturup grafiği kirletiriz (idempotentlik kaybolur).
+node_named_present() {
+  local name="$1"
+  pw-cli list-objects Node 2>/dev/null | grep -q -- "$name"
+}
+
+# WirePlumber ALSA cihazlarını Audio/Source ve Audio/Sink düğümü olarak
+# yayınlamadığında `module-echo-cancel` hedef düğüm bulamaz ve HİÇBİR ŞEY
+# üretmez. Bu fonksiyon sanal source/sink düğümlerini pw-cli ile ZORLA
+# oluşturur; modül bir sonraki adımda bu düğümlere bağlanabilir.
+#
+# SÖZDİZİMİ — EN SIK YAPILAN HATA:
+#   `pw-cli create-node` İLK argüman olarak FACTORY adını ister, ardından
+#   tek bir SPA özellik nesnesi alır:
+#       pw-cli create-node <factory> '{ ... }'
+#   Özellik nesnesini ilk argüman sanılırsa pw-cli factory adı olarak
+#   "factory.name=..." okur ve düğüm OLUŞMAZ (hata da vermez).
+#
+# HATA TOLERANSI: sürüm farkları sözdizimini değiştirebilir. Bu yüzden her
+# komut ayrı ayrı denenir, başarısızlık `set -e` ile betiği ÖLDÜRMEZ ve sonuç
+# ölçülerek dürüstçe raporlanır.
+#
+# Dönüş: 0 = en az bir düğüm mevcut/oluşturuldu, 1 = hiçbiri yok
+force_virtual_nodes() {
+  local created=0
+
+  if node_named_present "echo-cancel-sink"; then
+    log "echo-cancel-sink zaten var — atlandı (idempotent)"
+  elif pw-cli create-node adapter \
+    '{ factory.name=support.null-audio-sink node.name=echo-cancel-sink node.description="Echo Cancel Sink" media.class=Audio/Sink object.linger=true audio.position=[ FL FR ] }' \
+    >/dev/null 2>&1; then
+    log "echo-cancel-sink oluşturuldu (zorlama)"
+    created=1
+  else
+    warn "echo-cancel-sink oluşturulamadı (pw-cli sürüm/sözdizimi farkı olabilir)"
+  fi
+
+  if node_named_present "echo-cancel-source"; then
+    log "echo-cancel-source zaten var — atlandı (idempotent)"
+  elif pw-cli create-node adapter \
+    '{ factory.name=support.null-audio-sink node.name=echo-cancel-source node.description="Echo Cancel Source" media.class=Audio/Source/Virtual object.linger=true audio.position=[ FL FR ] }' \
+    >/dev/null 2>&1; then
+    log "echo-cancel-source oluşturuldu (zorlama)"
+    created=1
+  else
+    warn "echo-cancel-source oluşturulamadı (pw-cli sürüm/sözdizimi farkı olabilir)"
+  fi
+
+  # Yeni düğüm yaratılmadıysa zaten var olabilirler; iki durum da başarıdır.
+  [ "$created" -eq 1 ] && return 0
+  node_named_present "echo-cancel-source" || node_named_present "echo-cancel-sink"
+}
+
 # Mikrofonun gerçekten veri ürettiğini ÖLÇER (sıfır bayt / sıfır genlik tuzağı).
 # Neden gerekli: `arecord -D pipewire` bu sistemde hata vermeden tamamen sıfır
 # örnek döndürüyor. "Komut çalıştı" demek "ses geliyor" demek değildir.
@@ -150,6 +208,16 @@ do_status() {
     log "yok (kurulum yapılmamış)"
   fi
 
+  log "--- Zorlanmış sanal düğümler ---"
+  local vnode
+  for vnode in echo-cancel-source echo-cancel-sink; do
+    if node_named_present "$vnode"; then
+      log "  $vnode → VAR"
+    else
+      log "  $vnode → YOK"
+    fi
+  done
+
   log "--- AEC düğümü ---"
   if aec_node_present; then
     log "AEC düğümü VAR:"
@@ -157,6 +225,14 @@ do_status() {
   else
     warn "AEC düğümü YOK"
   fi
+
+  # Yazılımsal katman HER ZAMAN devrededir (donanımsal AEC'den bağımsız).
+  # Durumu burada göstermek önemli: kullanıcı "AEC yok" yazısını görüp
+  # otomatik barge-in'in de ölü olduğunu sanmamalı.
+  log "--- Yazılımsal yankı kapılaması (VAD blanking) ---"
+  log "  Etkin: referans tabanlı adaptif kapılama (agent/src/echo-guard.ts)"
+  log "  Kapatmak için: DIJI_AEC_SOFTWARE=0"
+  log "  Donanımsal AEC olmasa da otomatik barge-in çalışır."
 
   log "--- Ses düğümleri (wpctl) ---"
   wpctl status 2>/dev/null | sed -n '/^Audio/,/^Video/p' | head -20 || true
@@ -251,6 +327,13 @@ do_load_session() {
     return 0
   fi
 
+  # ZORLAMA ADIMI: modülü yüklemeden ÖNCE hedef düğümleri var etmeye çalış.
+  # Sıra önemli — modül yüklendiği anda hedef arar, yoksa sessizce hiçbir
+  # düğüm üretmez. Bu makinede tam olarak bu oluyordu.
+  log "Sanal ses düğümleri zorlanıyor (WirePlumber yayınlamıyorsa gerekli)"
+  force_virtual_nodes || true
+  sleep 0.5
+
   if pw-cli load-module libpipewire-module-echo-cancel "${module_args[@]}" >/dev/null 2>&1; then
     log "echo-cancel modülü yüklendi (bu oturum için)"
   else
@@ -264,12 +347,13 @@ do_load_session() {
     log "AEC düğümü oluştu:"
     pw-cli list-objects Node 2>/dev/null | grep -iE 'echo|diji-aec' | sed 's/^[[:space:]]*/    /'
   else
-    warn "Modül yüklendi AMA düğüm oluşmadı."
-    warn "Sebep genellikle şudur: WirePlumber bu sistemde ALSA cihazlarını"
-    warn "Audio/Source ve Audio/Sink düğümü olarak yayınlamıyor"
-    warn "(wpctl status → Audio bölümünde yalnızca 'Dummy Output' görünüyor)."
-    warn "Bu durumda AEC etkin DEĞİLDİR; Diji otomatik olarak donanım"
-    warn "mikrofonuna döner (bkz. agent/src/audio-io.ts → resolveAecDevices)."
+    warn "Modül yüklendi AMA AEC düğümü oluşmadı."
+    warn "Sanal düğüm zorlaması da sonuç vermedi. Bu bir HATA DEĞİL — Diji"
+    warn "donanımsal AEC olmadan da çalışır: yazılımsal yankı kapılaması"
+    warn "(AEC by VAD Blanking, agent/src/echo-guard.ts) otomatik devreye girer."
+    warn "Yazılımsal katman hoparlöre yazılan referans sinyalle karşılaştırma"
+    warn "yaptığı için sabit genlik eşiği kullanmaz; asistanın kendi sesini"
+    warn "kullanıcı sanma riski yoktur."
     return 1
   fi
   return 0

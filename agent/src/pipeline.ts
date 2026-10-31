@@ -26,6 +26,7 @@ import {
   MicrophoneInput,
   SpeakerOutput,
 } from './audio-io';
+import { EchoGuard, softwareAecEnabled } from './echo-guard';
 import {
   LLMEngine,
   LLMMessage,
@@ -295,6 +296,22 @@ export class VoicePipeline {
   private static readonly BARGEIN_VOICE_CHUNKS = 3;
 
   /**
+   * Yazılımsal yankı kapılaması.
+   *
+   * Donanımsal AEC bu makinede çalışmıyor (düğümler sessizlik üretiyor),
+   * bu yüzden asistan konuşurken mikrofonun duyduğu kendi sesini ayıklamak
+   * için referans tabanlı kapılama kullanılır. `null` ise katman kapalıdır
+   * (`DIJI_AEC_SOFTWARE=0`) ve otomatik barge-in güvenli tarafta kalır.
+   */
+  private echoGuard: EchoGuard | null = null;
+
+  /**
+   * Bastırılan parça sayacı — günlüğü her parçada doldurmamak için.
+   * Her 50 bastırmada bir özet satırı yazılır.
+   */
+  private suppressedSinceLog: number = 0;
+
+  /**
    * Akışlı turda hoparlöre YAZILAN ilk PCM'in zaman damgası.
    *
    * NEDEN alan: seslendirme artık turun içinden cümle cümle tetikleniyor;
@@ -306,22 +323,26 @@ export class VoicePipeline {
   /**
    * Otomatik (VAD kaynaklı) barge-in açık mı?
    *
-   * ÜÇ KADEMELİ KARAR — kullanıcı > ölçüm > güvenli varsayılan:
+   * DÖRT KADEMELİ KARAR — kullanıcı > yazılımsal koruma > donanım > kapalı:
    *
    *   1. `DIJI_BARGEIN_AUTO` açıkça verildiyse o kazanır.
-   *   2. Verilmediyse AEC'in FİİLEN kullanımda olup olmadığına bakılır
-   *      (`isAecInUse()` — `discoverDevices()` sırasında ölçülür).
-   *   3. Hiçbiri yoksa KAPALI.
+   *   2. Yazılımsal yankı kapılaması etkinse (`echoGuard` kurulu) AÇIK.
+   *      Referans tabanlı katman asistanın kendi sesini ayıkladığı için
+   *      kendini kesme riski ortadan kalkar — bu yüzden varsayılan açıktır.
+   *   3. Donanımsal AEC FİİLEN kullanımda ise (`isAecInUse()`) AÇIK.
+   *   4. Hiçbiri yoksa KAPALI.
    *
-   * NEDEN 2. kademe: otomatik barge-in, yankı silinmiyorken asistanın kendi
-   * sesini "kullanıcı konuşuyor" sanıp her cümlede kendini kesmesine yol
-   * açar. Bu makinede PipeWire echo-cancel düğümü oluşmadığı için AEC
-   * kullanılmıyor → varsayılan kapalı. AEC kurulduğunda insan müdahalesi
-   * olmadan açılır.
+   * NEDEN kapalı bir varsayılan vardı: otomatik barge-in, yankı
+   * silinmiyorken asistanın kendi sesini "kullanıcı konuşuyor" sanıp her
+   * cümlede kendini kesmesine yol açar (sonsuz sessizlik). FAZ 20'de
+   * yazılımsal katman eklendiği için artık 2. kademe devrededir ve özellik
+   * insan müdahalesi olmadan çalışır.
    */
   private get autoBargeIn(): boolean {
     const raw = process.env.DIJI_BARGEIN_AUTO;
     if (raw !== undefined) return /^(1|true|yes|on)$/i.test(raw);
+    // Yazılımsal AEC hazırsa yankı ayıklanıyor demektir; güvenle açılır.
+    if (this.echoGuard !== null) return true;
     return isAecInUse();
   }
 
@@ -546,11 +567,34 @@ export class VoicePipeline {
       );
     }
 
+    /*
+     * YAZILIMSAL YANKI KAPILAMASI — motor kurulumundan SONRA, dinlemeden ÖNCE.
+     *
+     * Donanımsal AEC bu makinede çalışmıyor (zorlanmış düğümler sessizlik
+     * üretiyor), bu yüzden asistan konuşurken kendi sesini ayıklayacak bir
+     * katman şart. Katman hazırsa otomatik barge-in de güvenle açılır
+     * (bkz. `autoBargeIn`).
+     */
+    if (softwareAecEnabled()) {
+      this.echoGuard = new EchoGuard();
+      logInfo('Yazilimsal yanki kapilamasi etkin (referans tabanli)', {
+        gain: this.echoGuard.getStats().gain,
+        note: 'Donanimsal AEC olmadan otomatik barge-in calisir',
+      });
+    } else {
+      this.echoGuard = null;
+      logWarn(
+        'Yazilimsal yanki kapilamasi KAPALI (DIJI_AEC_SOFTWARE=0) — ' +
+          'otomatik barge-in yalnizca donanimsal AEC varsa calisir'
+      );
+    }
+
     logInfo('Ses motorlari baslatildi', {
       stt: sttConfig.model,
       tts: ttsConfig.model,
       vad: vadConfig.provider,
       llmReady: this.isLlmReady,
+      softwareAec: this.echoGuard !== null,
     });
   }
 
@@ -828,17 +872,82 @@ export class VoicePipeline {
       const now = Date.now();
 
       /*
-       * BARGE-IN SAYACI.
+       * ASİSTAN AKTİF — YAZILIMSAL YANKI KAPILAMASI + BARGE-IN SAYACI.
        *
-       * Asistan konuşurken ardışık sesli parçalar sayılır. Tek parça
-       * (~100 ms) kapı çarpması/öksürük olabilir; 3 parça (~300 ms)
-       * kesintisiz konuşma demektir.
+       * İki katman birlikte çalışır:
        *
-       * Sayılan ses KONUŞMA TAMPONUNA EKLENMEZ: barge-in gerçekleşirse
+       *   1. KAPILAMA (`EchoGuard`): hoparlöre yazdığımız referansla
+       *      karşılaştırır. Parça referansla açıklanabiliyorsa YANKIDIR →
+       *      VAD'a sessizlik beslenir, sayaç sıfırlanır. Böylece asistanın
+       *      kendi sesi barge-in'i asla tetiklemez.
+       *
+       *   2. SAYAÇ: parça referansla açıklanamıyor ve VAD konuşma diyorsa
+       *      gerçek kullanıcıdır. Ardışık 3 parça (~300 ms) kesintisiz
+       *      konuşma demektir; tek parça kapı çarpması olabilir.
+       *
+       * NEDEN KAPILAMA OLMADAN SAYAÇ YETMİYOR: yankı genliği kullanıcıdan
+       * yüksek olabildiği için VAD yankıyı her zaman "konuşma" görür.
+       * Kapılama olmadan sayaç, asistanın kendi sesiyle 3 parçada dolar ve
+       * asistan her cümlede kendini keser (FAZ 19'da bu yüzden kapalıydı).
+       *
+       * Ses KONUŞMA TAMPONUNA EKLENMEZ: barge-in gerçekleşirse
        * `handleBargeIn()` tamponu zaten temizler, gerçekleşmezse (parazit)
        * tampona sızmamış olur.
        */
       if (assistantActive) {
+        const rms = this.echoGuard ? EchoGuard.computePcm16Rms(audioBuffer) : 0;
+
+        if (this.echoGuard) {
+          const decision = this.echoGuard.evaluate({
+            rms,
+            atMs: now,
+            vadSpeaking: isSpeech,
+          });
+
+          if (decision.bargeIn) {
+            logInfo('Yazilimsal AEC: kullanici sesi yankidan ayrildi, barge-in', {
+              observedRms: Number(decision.observedRms.toFixed(4)),
+              expectedEcho: Number(decision.expectedEcho.toFixed(4)),
+              ratio: Number(decision.ratio.toFixed(2)),
+              gain: decision.gain,
+              sessionId: this.sessionId,
+            });
+            this.consecutiveVoiceChunks = 0;
+            this.echoGuard.clearReference();
+            this.handleBargeIn();
+            return;
+          }
+
+          if (decision.suppressed) {
+            /*
+             * Yankı bastırıldı. VAD'a bu parçayı SESSİZ olarak bildirmek
+             * yerine hiç göndermiyoruz: `vadChunk` zaten çağrıldı, durum
+             * makineleri (isInSpeech, sayaçlar) sıfırlanıyor. PCM'i VAD'a
+             * yeniden beslemek gecikmeyi artırıp çift sayıma yol açardı.
+             */
+            this.consecutiveVoiceChunks = 0;
+            this.suppressedSinceLog += 1;
+            /*
+             * Her 20 bastırmada bir ÖZET satırı — `logInfo` seviyesinde.
+             *
+             * NEDEN debug değil: canlı doğrulamada "bastırma gerçekten
+             * çalışıyor mu" sorusunun cevabı varsayılan günlük seviyesinde
+             * görünmelidir. Aksi halde sessizlik ile bastırma ayırt edilemez.
+             * Her parçada yazmamak günlüğü okunabilir tutar.
+             */
+            if (this.suppressedSinceLog % 20 === 0) {
+              logInfo('Yazilimsal AEC: yanki bastirildi', {
+                // `getStats()` zaten `suppressed` sayacini tasir.
+                ratio: Number(decision.ratio.toFixed(2)),
+                ...this.echoGuard.getStats(),
+              });
+            }
+            return;
+          }
+          // Karar "referans-yok" veya "zayif-sinyal": kapılama uygulanmaz,
+          // aşağıdaki normal sayaç mantığı çalışır.
+        }
+
         if (isSpeech) {
           this.consecutiveVoiceChunks += 1;
           if (this.consecutiveVoiceChunks >= VoicePipeline.BARGEIN_VOICE_CHUNKS) {
@@ -1053,7 +1162,21 @@ export class VoicePipeline {
       logWarn('VAD yok; mikrofon aciliyor fakat sessizlik algilama devre disi');
     }
 
-    this.speaker = createSpeakerOutput();
+    /*
+     * Hoparlöre yazılan her PCM'i referans olarak kapılamaya bildir.
+     * Bu bağ olmadan sınıf "beklenen yankı"yı bilemez ve kör eşiğe döner —
+     * yani asistanın kendini kesme riski geri gelir.
+     */
+    this.speaker = createSpeakerOutput({
+      onReference: (atMs, pcm, sampleRate) => {
+        /*
+         * Örnekleme oranı MUTLAKA iletilir: referansın geçerlilik süresi
+         * PCM'in çalma süresidir. Oranı düşürürsek referans, ses daha
+         * çalarken ölür ve yankı kapılaması sessizce devre dışı kalır.
+         */
+        this.echoGuard?.recordReference(atMs, pcm, sampleRate);
+      },
+    });
 
     this.microphone = createMicrophoneInput();
     await this.microphone.start((chunk: Buffer) => {
@@ -1085,6 +1208,29 @@ export class VoicePipeline {
   /** Teşhis: mikrofon istatistikleri. */
   getAudioStats() {
     return this.microphone?.getStats() ?? null;
+  }
+
+  /**
+   * Teşhis: yazılımsal yankı kapılaması istatistikleri.
+   *
+   * NEDEN DIŞA AÇIK: "Bastırma çalışıyor mu" sorusu günlük seviyesine bağlı
+   * kalmamalı. `suppressed` sayacı artıyorsa yankı gerçekten ayıklanıyor
+   * demektir; `bargeIn` sayacı artıyorsa kullanıcı sesi yankıdan ayrılmış
+   * demektir. İkisi de canlı ölçülebilir olmalı; aksi halde "çalışıyor gibi
+   * görünüyor" ile "çalışıyor" ayırt edilemez.
+   */
+  getEchoGuardStats(): {
+    enabled: boolean;
+    gain?: number;
+    referenceBuckets?: number;
+    evaluated?: number;
+    suppressed?: number;
+    bargeIn?: number;
+    /** Karar nedenlerinin dağılımı — bastırmanın gerçekten çalıştığının kanıtı. */
+    reasons?: Record<string, number>;
+  } {
+    if (!this.echoGuard) return { enabled: false };
+    return { enabled: true, ...this.echoGuard.getStats() };
   }
 
   private async handleTurnEnd(
@@ -2131,6 +2277,15 @@ KURALLAR:
     this.speechBufferBytes = 0;
     this.isInSpeech = false;
     this.consecutiveVoiceChunks = 0;
+
+    /*
+     * Referans geçmişi de temizlenir: hoparlör kesildiği için artık çalan
+     * bir sinyal yoktur. Temizlenmezse eski referans, kullanıcının barge-in
+     * sonrası söylediği ilk sözlerle eşleşip onları yankı sanabilir —
+     * yani kullanıcı az önce sözünü kestiği hâlde duyulmaz.
+     */
+    this.echoGuard?.clearReference();
+    this.suppressedSinceLog = 0;
 
     this.emit('barge-in', {
       sessionId: this.sessionId,

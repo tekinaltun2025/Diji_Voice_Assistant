@@ -146,6 +146,15 @@ export function startControlServer(
             sessionId: p.getSessionId(),
             state: p.getState(),
             audio: p.getAudioStats(),
+            /*
+             * Yazılımsal yankı kapılaması durumu.
+             *
+             * NEDEN PANELDE: donanımsal AEC bu makinede çalışmıyor, bu yüzden
+             * "otomatik barge-in gerçekten korunuyor mu" sorusunun tek kanıtı
+             * bu sayaçlardır. `suppressed` artıyorsa yankı ayıklanıyor,
+             * `bargeIn` artıyorsa gerçek kullanıcı sesi ayrıştırılıyor.
+             */
+            echoGuard: p.getEchoGuardStats(),
           }
         : null,
       // TTS çalışma zamanı anahtarının GERÇEK değeri (env + kullanıcı seçimi).
