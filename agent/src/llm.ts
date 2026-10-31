@@ -320,7 +320,16 @@ export class LLMEngine {
   async generateResponse(
     messages: LLMMessage[],
     tools?: LLMTool[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    /**
+     * Dış iptal sinyali (barge-in).
+     *
+     * NEDEN: `generateResponse` yedek yol olarak akıştan çağrılır. Kullanıcı
+     * sözünü kestiğinde akıştaki istek iptal edilirken bu yedek istek ayakta
+     * kalıyordu ve iptal edilmiş tur için 1,5 saniyelik boşa bekleme
+     * yaratıyordu. Sinyal dışarıdan verilirse iki istek birlikte ölür.
+     */
+    externalSignal?: AbortSignal
   ): Promise<LLMResponse> {
     if (!this.isInitialized) {
       throw new Error('LLM motoru başlatılmamış');
@@ -363,15 +372,30 @@ export class LLMEngine {
         attempt: attempt + 1,
       });
 
+      /*
+       * İKİ SİNYAL, TEK FETCH.
+       *
+       * `AbortSignal.any()` iki sinyalden biri iptal olduğunda yok eder:
+       * zaman aşımı (bu sınıfın kendi koruması) veya dış iptal (barge-in).
+       * Bu yüzden kendi controller'ımızı atmıyoruz — zaman aşımı hâlâ
+       * gerekli, aksi halde sunucu yanıt vermezse istek sonsuza kadar asılı
+       * kalır ve `isProcessing` kilitlenir.
+       */
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+      const signal = externalSignal
+        ? AbortSignal.any([controller.signal, externalSignal])
+        : controller.signal;
 
       try {
+        // Dış sinyal zaten iptal edilmişse sunucuya hiç gitme.
+        externalSignal?.throwIfAborted();
+
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: this.buildHeaders(),
           body: JSON.stringify(requestBody),
-          signal: controller.signal,
+          signal,
         });
 
         if (!response.ok) {
@@ -441,7 +465,18 @@ export class LLMEngine {
   async *generateResponseStream(
     messages: LLMMessage[],
     tools?: LLMTool[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    /**
+     * Dış iptal sinyali (barge-in).
+     *
+     * NEDEN: akışlı tur çalışırken kullanıcı sözünü kestiğinde bu jeneratör
+     * `return()` ile kapatılır; ancak kapanış yalnızca bir sonraki `yield`
+     * noktasında etkili olur. Okuma (`reader.read()`) sunucu yeni bayt
+     * gönderene kadar asılı kaldığı için, jeneratörün beklemesini kesmek
+     * üzere `fetch` çağrısına dış sinyal bağlanır. Sinyal iptal edilince
+     * okuma reddedilir ve akış anında kapanır.
+     */
+    externalSignal?: AbortSignal
   ): AsyncGenerator<LLMStreamChunk, void, unknown> {
     if (!this.isInitialized) {
       throw new Error('LLM motoru başlatılmamış');
@@ -478,15 +513,22 @@ export class LLMEngine {
         hasTools: tools ? tools.length > 0 : false,
       });
 
+      // Zaman aşımı sinyali ile dış (barge-in) sinyali birleştirilir:
+      // hangisi önce iptal olursa istek ölür (bkz. `generateResponse`).
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+      const signal = externalSignal
+        ? AbortSignal.any([controller.signal, externalSignal])
+        : controller.signal;
 
       try {
+        externalSignal?.throwIfAborted();
+
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: this.buildHeaders(),
           body: JSON.stringify(requestBody),
-          signal: controller.signal,
+          signal,
         });
 
         if (!response.ok) {
@@ -612,10 +654,14 @@ export class LLMEngine {
                 `(düşünme: ${reasoningLength} karakter)`
             );
 
+            // Yedek istek de AYNI sinyale bağlanır: aksi halde akış iptal
+            // edilirken yedek istek ayakta kalıp iptal edilmiş tur için
+            // 1,5 saniye boşa bekletiyordu.
             const fallback = await this.generateResponse(
               messages,
               tools,
-              systemPrompt
+              systemPrompt,
+              externalSignal
             );
 
             if (fallback.content) {

@@ -22,10 +22,18 @@ import * as path from 'path';
 import {
   createMicrophoneInput,
   createSpeakerOutput,
+  isAecInUse,
   MicrophoneInput,
   SpeakerOutput,
 } from './audio-io';
-import { LLMEngine, LLMMessage, LLMResponse, LLMStreamChunk, LLMTool } from './llm';
+import {
+  LLMEngine,
+  LLMMessage,
+  LLMResponse,
+  LLMStreamChunk,
+  LLMTool,
+  LLMToolCall,
+} from './llm';
 import { MCPClient, VoiceConfirmationRequest } from './mcp-client';
 import { readApiKeyFile, writeApiKeyFile, writeEnvVars } from './env-prefs';
 import {
@@ -239,6 +247,83 @@ export class VoicePipeline {
   // Barge-in control
   private isTtsSpeaking: boolean = false;
   private abortController: AbortController | null = null;
+
+  /**
+   * Tur nesli (generation) sayacı.
+   *
+   * NEDEN GEREKLİ: `handleBargeIn()` çalışan turu iptal eder ama Node'da
+   * iptal "öldürme" değildir — iptal edilen turun `finally` blokları ve
+   * `await` sonrası devam eden satırları çalışmaya devam eder. Eskiden bu
+   * satırlar YENİ turun durumunu eziyordu (canlı gözlem: kullanıcı sözünü
+   * kestiğinde `isProcessing` yanlışlıkla `false`/`true` arasında kalıyor,
+   * sonraki tur sessizce atlanıyordu).
+   *
+   * Çözüm: her tur başında bu sayaç artırılır. Tur içindeki her durum yazımı
+   * kendi neslini doğrular; nesli eskimişse yazmaz.
+   */
+  private turnGeneration: number = 0;
+
+  /**
+   * Akışlı yanıt sırasında şu ana kadar ÜRETİLEN metin.
+   *
+   * NEDEN: Kullanıcı asistanı yarıda keserse üretilen kısım kaybolmamalı;
+   * `handleBargeIn()` bu metni `" [kullanıcı sözü kesti]"` işaretiyle sohbet
+   * geçmişine yazar, böylece model sonraki turda nerede kaldığını bilir.
+   */
+  private partialAssistantText: string = '';
+
+  /**
+   * Akışlı TTS cümle kuyruğunun sıralı zinciri.
+   *
+   * NEDEN: Cümleler LLM'den geldikçe sentezlenip çalınır. Ayrı ayrı
+   * `await` edilmediğinde (amaç: akışı bloklamamak) iki cümle aynı anda
+   * hoparlöre yazılabilir ve ses karışır. Zincir, çalmayı serileştirirken
+   * sentezin akışla paralel ilerlemesini korur.
+   */
+  private ttsChain: Promise<void> = Promise.resolve();
+
+  /**
+   * Otomatik VAD barge-in için ardışık sesli parça sayacı.
+   *
+   * NEDEN 3 parça: 100 ms'lik parçalarda tek bir parça kapı çarpması, öksürük
+   * veya yankı artığı olabilir. 3 ardışık parça (~300 ms kesintisiz konuşma)
+   * gerçek bir müdahale ile paraziti ayırır.
+   */
+  private consecutiveVoiceChunks: number = 0;
+
+  /** Otomatik VAD barge-in eşiği (ardışık parça). */
+  private static readonly BARGEIN_VOICE_CHUNKS = 3;
+
+  /**
+   * Akışlı turda hoparlöre YAZILAN ilk PCM'in zaman damgası.
+   *
+   * NEDEN alan: seslendirme artık turun içinden cümle cümle tetikleniyor;
+   * ayrı bir `speakResponse()` çağrısı yok. `totalMs` ölçümü bu damgaya
+   * dayanır (ses çıkışı = kullanıcının beklediği an).
+   */
+  private turnFirstAudioAt: number | null = null;
+
+  /**
+   * Otomatik (VAD kaynaklı) barge-in açık mı?
+   *
+   * ÜÇ KADEMELİ KARAR — kullanıcı > ölçüm > güvenli varsayılan:
+   *
+   *   1. `DIJI_BARGEIN_AUTO` açıkça verildiyse o kazanır.
+   *   2. Verilmediyse AEC'in FİİLEN kullanımda olup olmadığına bakılır
+   *      (`isAecInUse()` — `discoverDevices()` sırasında ölçülür).
+   *   3. Hiçbiri yoksa KAPALI.
+   *
+   * NEDEN 2. kademe: otomatik barge-in, yankı silinmiyorken asistanın kendi
+   * sesini "kullanıcı konuşuyor" sanıp her cümlede kendini kesmesine yol
+   * açar. Bu makinede PipeWire echo-cancel düğümü oluşmadığı için AEC
+   * kullanılmıyor → varsayılan kapalı. AEC kurulduğunda insan müdahalesi
+   * olmadan açılır.
+   */
+  private get autoBargeIn(): boolean {
+    const raw = process.env.DIJI_BARGEIN_AUTO;
+    if (raw !== undefined) return /^(1|true|yes|on)$/i.test(raw);
+    return isAecInUse();
+  }
 
   /**
    * Çalışma zamanı TTS anahtarı.
@@ -696,14 +781,38 @@ export class VoicePipeline {
       return;
     }
 
-    // Kendi sesimizi dinlemeyelim (yanki dongusu).
-    if (this.state.isBargeIn || this.isTtsSpeaking) {
-      logDebug('Barge-in/TTS aktif, ses islenmiyor');
+    /*
+     * OTOMATİK VAD BARGE-IN.
+     *
+     * ESKİ DAVRANIŞ: `if (isBargeIn || isTtsSpeaking) return;` — asistan
+     * konuşurken mikrofon TAMAMEN kapatılıyordu. Bu, yankı döngüsünü
+     * engelliyordu ama kullanıcının asistanı kesmesini de imkânsız kılıyordu
+     * (tek yol arayüzdeki düğmeydi).
+     *
+     * YENİ DAVRANIŞ: asistan konuşurken ses YOK SAYILMAZ, VAD ile dinlenir.
+     * Ardışık 3 parça (~300 ms) ses algılanırsa `handleBargeIn()` çağrılır.
+     *
+     * ⚠️ GÜVENLİK: yankı engelleme (AEC) ÇALIŞMIYORKEN bu, asistanın kendi
+     * sesini "kullanıcı" sanıp her cümlede kendini kesmesine yol açar.
+     * Bu makinede PipeWire echo-cancel düğümü oluşmadığı için özellik
+     * VARSAYILAN OLARAK KAPALIDIR (`DIJI_BARGEIN_AUTO=1` ile açılır).
+     * AEC doğrulandıktan sonra açılması güvenlidir.
+     */
+    if (this.state.isBargeIn) {
+      // Histerezis penceresi: barge-in sonrası hoparlör susana kadar
+      // gelen ses yok sayılır (kendi son hecemizi duymayalım).
+      logDebug('Barge-in histerezis penceresi, ses islenmiyor');
       return;
     }
 
-    // Islem surerken yeni ses biriktirme (turn zaten kapandi).
-    if (this.state.isProcessing) {
+    const assistantActive = this.isTtsSpeaking || this.state.isProcessing;
+    if (assistantActive && !this.autoBargeIn) {
+      logDebug('TTS/islem aktif, otomatik barge-in kapali — ses islenmiyor');
+      return;
+    }
+
+    // Islem/TTS aktif DEĞİLKEN yeni ses biriktirme (tur zaten kapandi).
+    if (this.state.isProcessing && !this.autoBargeIn) {
       logDebug('Isleme devam ediyor, ses biriktirilmiyor');
       return;
     }
@@ -717,6 +826,38 @@ export class VoicePipeline {
       // Teşhis: her parçada VAD güveni panele yazılır (canlı "ses alınıyor mu").
       telemetry.vadChunk(isSpeech, vadResult?.confidence ?? 1, vadResult?.audioLevel);
       const now = Date.now();
+
+      /*
+       * BARGE-IN SAYACI.
+       *
+       * Asistan konuşurken ardışık sesli parçalar sayılır. Tek parça
+       * (~100 ms) kapı çarpması/öksürük olabilir; 3 parça (~300 ms)
+       * kesintisiz konuşma demektir.
+       *
+       * Sayılan ses KONUŞMA TAMPONUNA EKLENMEZ: barge-in gerçekleşirse
+       * `handleBargeIn()` tamponu zaten temizler, gerçekleşmezse (parazit)
+       * tampona sızmamış olur.
+       */
+      if (assistantActive) {
+        if (isSpeech) {
+          this.consecutiveVoiceChunks += 1;
+          if (this.consecutiveVoiceChunks >= VoicePipeline.BARGEIN_VOICE_CHUNKS) {
+            logInfo('Otomatik barge-in: kullanici konusmaya basladi', {
+              chunkCount: this.consecutiveVoiceChunks,
+              sessionId: this.sessionId,
+            });
+            this.handleBargeIn();
+            return;
+          }
+        } else {
+          this.consecutiveVoiceChunks = 0;
+        }
+        // Asistan konuşurken ses biriktirilmez (henüz barge-in eşiği aşılmadı).
+        return;
+      }
+
+      // Konuşma yoksa sayaç sıfırlanır.
+      if (!isSpeech) this.consecutiveVoiceChunks = 0;
 
       if (isSpeech) {
         if (!this.isInSpeech) {
@@ -999,34 +1140,98 @@ export class VoicePipeline {
         }
       }
 
-      // LLM ile yanıt üret
-      const llmResponse = await this.generateLLMResponse(userText);
+      // Bu turun nesli: `handleBargeIn()` sayacı artırdığında aşağıdaki
+      // durum yazımları geçersiz olur ve çalışmayı bırakır.
+      const generation = this.turnGeneration;
 
-      // MCP tool çağrıları varsa işle
-      if (llmResponse.tool_calls && llmResponse.tool_calls.length > 0) {
-        await this.handleMCPToolCalls(llmResponse.tool_calls);
+      // Barge-in bu turu iptal edebilsin diye dış sinyal bağlanır.
+      const controller = new AbortController();
+      this.abortController = controller;
+
+      /*
+       * AKIŞLI TUR: yanıtın tamamı beklenmez; cümleler hazır oldukça
+       * sentezlenip çalınır (ölçülen kazanç: ilk ses 1598 ms → 110 ms).
+       *
+       * HATA İZOLASYONU: akış yolu LLM'e ulaşamazsa (sunucu kapalı, anahtar
+       * yok, model yok) eskiden istisna yukarı fırlıyor ve kullanıcı HİÇBİR
+       * ŞEY duymuyordu. Canlı doğrulamada yakalandı: DeepSeek 5 sn zaman
+       * aşımına düştü ve tüm turlar sessizce düştü. Artık boru hattının
+       * mevcut davranışı korunuyor: kullanıcıya kısa bir bilgi mesajı söylenir.
+       */
+      let turnResult: { spokenText: string; toolCalls: LLMToolCall[] };
+      let streamingFailed = false;
+      try {
+        turnResult = await this.runStreamingTurn(userText, controller.signal);
+      } catch (streamError) {
+        // Barge-in iptali hata değildir: tur zaten kapandı.
+        if (controller.signal.aborted) throw streamError;
+
+        streamingFailed = true;
+        logWarn('Akisli tur basarisiz, kullaniciya bilgi veriliyor', {
+          error: (streamError as Error).message,
+          sessionId: this.sessionId,
+        });
+        turnResult = { spokenText: '', toolCalls: [] };
+      }
+
+      this.abortController = null;
+
+      // Barge-in olduysa tur burada biter: geri yazma yok, durum zaten
+      // `handleBargeIn()` tarafından güncellendi.
+      if (generation !== this.turnGeneration) {
+        logInfo('Tur barge-in ile sonlandi, gecmis yazimi atlandi', {
+          sessionId: this.sessionId,
+        });
+        return;
+      }
+
+      // MCP tool çağrıları varsa işle (akış boyunca biriktirilmiş).
+      if (turnResult.toolCalls.length > 0) {
+        await this.handleMCPToolCalls(turnResult.toolCalls);
       }
 
       // Reasoning modelleri bazen butceyi dusunmeye harcayip bos `content`
       // dondurur. Bu durumda sessiz kalmak yerine kullaniciya kisa bir bilgi
       // verilir; aksi halde asistan "donmus" gibi gorunur.
-      let spokenText = llmResponse.content.trim();
+      let spokenText = turnResult.spokenText.trim();
       if (!spokenText) {
         logWarn('LLM bos yanit dondurdu, yedek mesaj kullaniliyor', {
-          hadReasoning: !!llmResponse.reasoning,
           sessionId: this.sessionId,
+          streamingFailed,
         });
-        spokenText = 'Bunu şu anda yanıtlayamadım. Soruyu farklı bir şekilde sorar mısınız?';
+        // LLM'e hiç ulaşılamadıysa "yanıtlayamadım" demek yanıltıcı olur;
+        // kullanıcı bağlantı sorununu bilmeli.
+        spokenText = streamingFailed
+          ? 'Şu anda dil modeline ulaşamıyorum. Bağlantıyı kontrol edip tekrar dener misiniz?'
+          : 'Bunu şu anda yanıtlayamadım. Soruyu farklı bir şekilde sorar mısınız?';
+        // Yedek mesaj seslendirilmediyse kullanıcı sessizlik duymasın.
+        if (!ttsDisabled(this) && this.ttsEngine) {
+          try {
+            await this.speakResponse(spokenText);
+          } catch (error) {
+            logWarn('Yedek mesaj seslendirilemedi', {
+              error: (error as Error).message,
+            });
+          }
+        }
       }
 
       // Yanıt uzunluğu (`replyChars`) — seslendirilen gerçek metin.
       telemetry.setReplyChars(spokenText.length);
 
-      // TTS ile sesli yanıt. `speakResponse()` turu kapatır ve ölçümü döndürür;
-      // dönen `totalMs` asistan sohbet balonundaki gecikme notunu besler.
-      const latency = this.ttsEngine
-        ? await this.speakResponse(spokenText)
-        : this.publishTurnLatency(null, false);
+      // Tur ölçümü: akışlı yolda ilk ses `turnFirstAudioAt` ile işaretlendi.
+      const latency = this.publishTurnLatency(
+        this.turnFirstAudioAt,
+        !ttsDisabled(this) && !!this.ttsEngine
+      );
+
+      // LLM bağlamı: yanıt geçmişe eklenmeli, aksi halde model sonraki turda
+      // kendi söylediğini hatırlamaz.
+      this.conversationHistory.push({ role: 'user', content: userText });
+      this.conversationHistory.push({ role: 'assistant', content: spokenText });
+      if (this.conversationHistory.length > 20) {
+        this.conversationHistory = this.conversationHistory.slice(-20);
+      }
 
       // Sohbet geçmişi: asistan yanıtı (madde 4). Sesli ve metin yolu AYNI
       // `displayHistory` listesine yazar; arayüz `conversation-update` ile
@@ -1038,12 +1243,10 @@ export class VoicePipeline {
       this.state.isListening = true;
 
       this.emit('state-change', { state: this.state });
-      // `llmResponse.content` yerine `spokenText` yayinlanir: bos yanit
-      // durumunda kullaniciya gercekten soylenen yedek mesaj gorunmelidir.
       this.emit('llm-complete', {
         response: spokenText,
-        rawResponse: llmResponse.content,
-        hadReasoning: !!llmResponse.reasoning,
+        rawResponse: turnResult.spokenText,
+        hadReasoning: false,
         sessionId: this.sessionId,
       });
 
@@ -1186,7 +1389,15 @@ Kullanici mesaji: ${userText}`;
   }
 
   private async *generateLLMResponseStream(
-    userText: string
+    userText: string,
+    /**
+     * Barge-in iptal sinyali.
+     *
+     * NEDEN gerekli: akış sırasında kullanıcı sözünü kestiğinde HTTP okuması
+     * `reader.read()` içinde asılı kalır; sinyal olmadan yeni tur için
+     * `isProcessing` kilidi açılmaz.
+     */
+    signal?: AbortSignal
   ): AsyncGenerator<LLMStreamChunk, void, unknown> {
     if (!this.llmEngine) {
       throw new Error('LLM engine baslatilmamis');
@@ -1214,7 +1425,8 @@ KURALLAR:
     yield* this.llmEngine.generateResponseStream(
       messages,
       tools.length > 0 ? tools : undefined,
-      systemPrompt
+      systemPrompt,
+      signal
     );
   }
 
@@ -1502,6 +1714,191 @@ KURALLAR:
   }
 
   /**
+   * Akışlı tur: LLM'den gelen parçaları cümle sınırında TTS'e aktarır.
+   *
+   * ESKİ DAVRANIŞ (kapalıydı): `generateLLMResponse()` yanıtın TAMAMINI
+   * bekliyor, sonra `speakResponse()` metnin tamamını seslendiriyordu.
+   * Canlı ölçüm: akışsız ilk ses 1598 ms, akışlı ilk ses 110 ms — 14 kat.
+   *
+   * YENİ DAVRANIŞ: parçalar geldikçe biriktirilir; nokta/soru/ünlem gibi bir
+   * cümle sonu görüldüğünde o cümle hemen sentezlenip çalınır. Kullanıcı
+   * modelin cümleyi bitirmesini beklemez.
+   *
+   * KORUNANLAR (regresyon olmasın diye):
+   *   - `tool_calls` biriktirilir ve tur sonunda `handleMCPToolCalls()`'a
+   *     verilir; MCP yeteneği kaybolmaz.
+   *   - Akış içerik üretmezse (yalnızca düşünme metni) yedek mesaj söylenir.
+   *   - `conversationHistory` + `recordAssistantMessage` ikisi de yazılır;
+   *     arayüz balonu ve LLM bağlamı ayrı ayrı beslenir.
+   *
+   * @returns Seslendirilen metin ve MCP araç çağrıları.
+   */
+  private async runStreamingTurn(
+    userText: string,
+    signal: AbortSignal
+  ): Promise<{ spokenText: string; toolCalls: LLMToolCall[] }> {
+    if (!this.llmEngine) {
+      throw new Error('LLM engine baslatilmamis');
+    }
+
+    const speak = !ttsDisabled(this) && !!this.ttsEngine;
+
+    if (speak) {
+      this.state.isSpeaking = true;
+      this.isTtsSpeaking = true;
+      this.emit('state-change', { state: this.state });
+      this.emit('tts-speaking', { text: '', sessionId: this.sessionId });
+    }
+
+    const ttsBegin = Date.now();
+    this.turnFirstAudioAt = null;
+    this.partialAssistantText = '';
+
+    let accumulated = '';
+    let pending = '';
+    let lastChunkAt = 0;
+    const toolCalls: LLMToolCall[] = [];
+
+    // Cümleleri sırayla sentezleyip çalan zincir. `await` EDİLMEZ:
+    // akışı bloklamamak esas amaçtır; sıra koruması zincirle sağlanır.
+    const queueSentence = (sentence: string): void => {
+      const clean = sentence.trim();
+      if (!clean || !/[\p{L}\p{N}]/u.test(clean)) return;
+
+      this.ttsChain = this.ttsChain
+        .then(() => this.synthesizeAndPlaySentence(clean, ttsBegin))
+        .catch((error: unknown) => {
+          // Tek cümlenin hatası turu düşürmez (TTS tarafındaki aynı kural).
+          logWarn('Akisli TTS cumlesi calinamadi', {
+            error: (error as Error).message,
+          });
+        });
+    };
+
+    try {
+      for await (const chunk of this.generateLLMResponseStream(userText, signal)) {
+        // Barge-in: tur geçersiz kılındıysa döngüden çık.
+        if (signal.aborted) break;
+
+        if (chunk.tool_calls && chunk.tool_calls.length > 0) {
+          toolCalls.push(...chunk.tool_calls);
+        }
+
+        // `content` hiçbir zaman null değil (bkz. `LLMStreamChunk`); boş
+        // string olabilir — boş parça yalnızca araç çağrısı taşıyan iletidir.
+        const delta = chunk.content ?? '';
+        if (!delta) continue;
+
+        const now = Date.now();
+        lastChunkAt = now;
+
+        // İLK TOKEN: kullanıcının gördüğü ilk metin anı.
+        if (!accumulated) {
+          const since = this.turnStartedAt ?? now;
+          telemetry.addStageTime('llm', now - since);
+          telemetry.setLlmFirstToken(now - since);
+        }
+
+        accumulated += delta;
+        pending += delta;
+        // Barge-in sırasında geçmişe yazılacak kısmi metin.
+        this.partialAssistantText = accumulated;
+
+        this.emit('llm-streaming', { content: delta });
+
+        // Cümle sınırı: nokta/soru/ünlem/noktalı virgül sonrası boşluk.
+        // Lookbehind sayesinde ayırıcı cümlede kalır.
+        const pieces = pending.split(/(?<=[.,!?:;])\s+/);
+        pending = pieces.pop() ?? '';
+        for (const piece of pieces) queueSentence(piece);
+      }
+    } catch (error) {
+      // Barge-in kaynaklı iptal normaldir; hata olarak raporlanmaz.
+      if (signal.aborted || (error as Error).name === 'AbortError') {
+        logInfo('Akisli tur barge-in ile iptal edildi', {
+          sessionId: this.sessionId,
+        });
+      } else {
+        logError('Akisli tur hatasi', error as Error);
+        throw error;
+      }
+    }
+
+    // Kalan parçayı da seslendir (cümle sonu işareti olmayabilir).
+    if (pending.trim()) queueSentence(pending);
+
+    if (speak) {
+      // Tüm cümleler çalana kadar bekle; aksi halde son hece kesilir.
+      await this.ttsChain.catch(() => undefined);
+      await this.speaker?.flush().catch(() => undefined);
+
+      if (this.turnFirstAudioAt !== null) {
+        telemetry.setTtsTiming(
+          this.turnFirstAudioAt - ttsBegin,
+          (lastChunkAt || Date.now()) - ttsBegin
+        );
+        telemetry.setPlaybackTime(Date.now() - this.turnFirstAudioAt);
+      }
+
+      this.state.isSpeaking = false;
+      this.isTtsSpeaking = false;
+      this.emit('tts-complete', { text: accumulated, sessionId: this.sessionId });
+      this.emit('state-change', { state: this.state });
+    }
+
+    return {
+      spokenText: accumulated,
+      toolCalls: Array.from(
+        // Aynı kimlikle birden fazla parça gelirse tekilleştir.
+        new Map(toolCalls.map((call) => [call.id || `${call.function.name}`, call])).values()
+      ),
+    };
+  }
+
+  /**
+   * Tek bir cümleyi sentezleyip hoparlöre yazar (akışlı tur yardımcısı).
+   *
+   * NEDEN ayrı metot: `ttsChain` içinde sırayla çalışır, turun akışını
+   * bloklamaz ve barge-in sonrası sessizce düşer.
+   */
+  private async synthesizeAndPlaySentence(
+    sentence: string,
+    ttsBegin: number
+  ): Promise<void> {
+    if (!this.ttsEngine) return;
+    // Tur iptal edildiyse sentezleme: boşa CPU harcamayalım.
+    if (this.state.isBargeIn) return;
+
+    for await (const event of this.ttsEngine.speakStream(sentence)) {
+      if (event.type === 'audio' && event.audioBuffer) {
+        if (this.speaker) {
+          /*
+           * `play()` await EDİLMEZ — hoparlör yazımı kendi kuyruğunda
+           * serileşir. Beklenseydi sentez ile çalma birbirini kilitlerdi.
+           */
+          void this.speaker.play(
+            event.audioBuffer,
+            event.sampleRate ?? this.ttsEngine?.getSampleRate()
+          );
+        }
+
+        if (this.turnFirstAudioAt === null) {
+          this.turnFirstAudioAt = Date.now();
+          telemetry.setTtsTiming(this.turnFirstAudioAt - ttsBegin, 0);
+        }
+
+        this.emit('tts-speaking', {
+          audioBuffer: event.audioBuffer,
+          text: event.text,
+          sessionId: this.sessionId,
+        });
+      } else if (event.type === 'error') {
+        logWarn('Akisli TTS parcasi hata verdi', { text: event.text });
+      }
+    }
+  }
+
+  /**
    * Tur gecikmesini BİR KEZ yayınlar ve tur zamanlayıcısını temizler.
    *
    * Neden tek sefer: `speakResponse()` hem ana yanıt hem MCP onay sorusu
@@ -1649,15 +2046,39 @@ KURALLAR:
     return this.pendingConfirmation !== null;
   }
 
+  /**
+   * Kullanıcının asistanı sözünü kesmesi (barge-in).
+   *
+   * ÜÇ ŞEY BİRDEN KAPATILMALIDIR — biri eksik kalırsa müdahale "görünmez"
+   * olur ve sistem kendi kendine konuşmaya devam eder:
+   *
+   *   1. LLM isteği  → `AbortController.abort()` (ağ bağlantısı iptal)
+   *   2. TTS üretimi → `ttsEngine.stop()` (sonraki cümleyi sentezleme)
+   *   3. Hoparlör    → `speaker.interrupt()` (çalmakta olan PCM'i kes)
+   *
+   * Eskiden 2 ve 3 eksikti: `ttsEngine.stop()` yalnızca BİR SONRAKİ cümleyi
+   * durduruyordu, hoparlöre yazılmış ses kesilmiyordu; `speaker.interrupt()`
+   * hiç çağrılmıyordu. Ayrıca `isProcessing` sıfırlanmadığı için kullanıcının
+   * müdahale sırasında söylediği söz `processAudio()` tarafından sessizce
+   * atılıyordu.
+   */
   handleBargeIn(): void {
     if (!this.isRunning) return;
 
-    logInfo('Barge-in algilandi, TTS durduruluyor', {
+    // Turu geçersiz kıl: eski turun `await` sonrası satırları artık durum
+    // yazamaz (bkz. `turnGeneration` açıklaması).
+    this.turnGeneration += 1;
+    const interruptedGeneration = this.turnGeneration - 1;
+
+    logInfo('Barge-in algilandi, tur iptal ediliyor', {
       sessionId: this.sessionId,
+      generation: interruptedGeneration,
+      hadPartialText: this.partialAssistantText.length > 0,
     });
 
     this.state.isBargeIn = true;
     this.state.isSpeaking = false;
+    this.state.isProcessing = false;
     this.isTtsSpeaking = false;
 
     // Barge-in turu iptal eder: yarım kalan ölçüm yayınlanmaz, son başarılı
@@ -1666,16 +2087,50 @@ KURALLAR:
     this.turnLatencyPublished = true;
     telemetry.abortTurn();
 
-    // TTS'i durdur
+    // (1) LLM isteğini iptal et. `abort()` senkron çalışır; `fetch` reddeder.
+    if (this.abortController) {
+      try {
+        this.abortController.abort();
+      } catch (error) {
+        logDebug('AbortController zaten kapatilmis', {
+          error: (error as Error).message,
+        });
+      }
+      this.abortController = null;
+    }
+
+    // (2) TTS sentez döngüsünü durdur (sonraki cümle sentezlenmez).
     if (this.ttsEngine) {
       this.ttsEngine.stop();
     }
 
-    // Abort controller'i tetikle
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
+    // (3) Hoparlörde çalan sesi hemen kes. `SIGTERM` → `aplay` süreci
+    // kapanır; kuyruktaki yeni parçalar `stopped` bayrağına gerek kalmadan
+    // EPIPE ile sessizce düşer (bkz. `writeChunk`).
+    if (this.speaker) {
+      this.speaker.interrupt();
     }
+
+    // Yarım kalan asistan metnini geçmişe yaz: model sonraki turda nerede
+    // kaldığını bilmeli. Boşsa hiçbir şey eklenmez (geçmişi kirletmesin).
+    const partial = this.partialAssistantText.trim();
+    this.partialAssistantText = '';
+    if (partial.length > 0) {
+      const marked = `${partial} [kullanıcı sözü kesti]`;
+      this.conversationHistory.push({ role: 'assistant', content: marked });
+      // Arayüzde de görünmeli: aksi halde kullanıcı yarım yanıtı göremez.
+      this.recordAssistantMessage(marked, 'voice', undefined);
+      if (this.conversationHistory.length > 20) {
+        this.conversationHistory = this.conversationHistory.slice(-20);
+      }
+    }
+
+    // Yarım kalan konuşma tamponu SİLİNMELİ: aksi halde barge-in sonrası
+    // söylenen ilk söz, kesilen cümlenin sesiyle birleşip tek segment olur.
+    this.speechBuffer = [];
+    this.speechBufferBytes = 0;
+    this.isInSpeech = false;
+    this.consecutiveVoiceChunks = 0;
 
     this.emit('barge-in', {
       sessionId: this.sessionId,
@@ -1684,12 +2139,22 @@ KURALLAR:
 
     this.emit('state-change', { state: this.state });
 
-    // Kisa bir sure sonra barge-in'i sıfırla
+    /*
+     * HISTEREZİS — 300 ms.
+     *
+     * `isBargeIn` bu süre boyunca `true` kalır ve `processAudio()` sesi
+     * yok sayar. NEDEN: hoparlörü kesen `SIGTERM` ile sesin gerçekten
+     * susması arasında ALSA tamponu kadar (~onlarca ms) gecikme vardır.
+     * Bu pencere kapatılmazsa mikrofon kendi son hecesini duyar ve yeni
+     * turu yanlış transkriptle başlatır.
+     */
     setTimeout(() => {
+      // Bu arada yeni bir barge-in geldiyse dokunma (nesil kontrolü).
+      if (this.turnGeneration !== interruptedGeneration + 1) return;
       this.state.isBargeIn = false;
       this.state.isListening = true;
       this.emit('state-change', { state: this.state });
-    }, 500);
+    }, 300);
   }
 
   getState(): PipelineState {

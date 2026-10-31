@@ -51,6 +51,67 @@ export interface SpeakerOptions {
 }
 
 /**
+ * AEC (yankı engelleme) düğümünün adını çözer.
+ *
+ * NEDEN GEREKLİ: Gerçek full-duplex çalışmada mikrofon, hoparlör çıkışı
+ * açıkken de dinlemeye devam eder. Yankı yazılım seviyesinde silinmezse
+ * VAD asistanın kendi sesini "kullanıcı konuşuyor" sanar ve sistem kendini
+ * sonsuz keser.
+ *
+ * NASIL: PipeWire echo-cancel modülü yüklendiğinde bir `Audio/Source` ve bir
+ * `Audio/Sink` düğümü oluşturur. Düğüm adı sürüme/dile göre değişebildiği
+ * için SABİT ad yazılmaz; `pw-cli list-objects Node` çıktısı taranır.
+ *
+ * BULUNAMAZSA `null` döner ve çağıran taraf mevcut donanım cihazına döner —
+ * AEC yokluğu bir hata değildir (bkz. setup-aec.sh: bu sistemde WirePlumber
+ * ALSA cihazlarını düğüm olarak yayınlamadığı için AEC düğümü oluşmuyor).
+ */
+/**
+ * Yankı engellemenin FİİLEN kullanımda olup olmadığını bildirir.
+ *
+ * NEDEN GEREKLİ: Otomatik VAD barge-in, yankı silinmiyorken asistanın kendi
+ * sesini "kullanıcı konuşuyor" sanıp her cümlede kendini kesmesine yol açar.
+ * Bu yüzden barge-in varsayılan olarak yalnızca AEC gerçekten kullanılıyorsa
+ * açılır. Değer `discoverDevices()` sırasında, gerçek seçim yapıldığında
+ * belirlenir — tahmin değil, ölçüm.
+ */
+let aecInUse = false;
+
+/** AEC kaynağı giriş cihazı olarak seçildi mi? */
+export function isAecInUse(): boolean {
+  return aecInUse;
+}
+
+function detectAecNode(mediaClass: 'Audio/Source' | 'Audio/Sink'): string | null {
+  // Kullanıcı AEC'i kapatmak istediyse hiç arama yapma.
+  if (process.env.DIJI_AUDIO_USE_AEC === '0') return null;
+
+  try {
+    const dump = execFileSync('pw-cli', ['list-objects', 'Node'], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+
+    // Kayıtları nesne sınırında böl: her `id: N` yeni bir düğüm başlatır.
+    const blocks = dump.split(/\n(?=\s*id:\s*\d+)/);
+    for (const block of blocks) {
+      if (!block.includes(mediaClass)) continue;
+      const nameMatch = block.match(/node\.name\s*=\s*"([^"]+)"/);
+      if (!nameMatch) continue;
+      const name = nameMatch[1];
+      // echo-cancel düğümleri adında "echo" veya setup-aec.sh'de yazdığımız
+      // "diji-aec" önekini taşır.
+      if (/echo|diji-aec/i.test(name)) return name;
+    }
+  } catch (error) {
+    // `pw-cli` yoksa veya PipeWire kapalıysa sessizce devam et: AEC isteğe
+    // bağlı bir iyileştirmedir, zorunluluk değildir.
+    logDebug('AEC düğümü aranamadı', { error: (error as Error).message });
+  }
+  return null;
+}
+
+/**
  * Mikrofon akışı.
  *
  * `arecord` alt süreci başlatır ve stdout'tan gelen PCM parçalarını
@@ -140,6 +201,22 @@ export class MicrophoneInput {
   }
 
   /**
+   * AEC (yankı engelleme) kaynağının adını çözer.
+   *
+   * NEDEN GEREKLİ: Gerçek full-duplex çalışmada mikrofon, hoparlör çıkışı
+   * açıkken de dinlemeye devam eder. Yankı yazılım seviyesinde silinmezse
+   * VAD asistanın kendi sesini "kullanıcı konuşuyor" sanar.
+   *
+   * NASIL: PipeWire echo-cancel modülü yüklendiğinde bir `Audio/Source`
+   * düğümü oluşturur. Düğüm adı sürüme/dile göre değiştiği için SABİT ad
+   * yazılmaz; `pw-dump` çıktısı taranır.
+   *
+   * BULUNAMAZSA `null` döner ve çağıran taraf donanım cihazına döner —
+   * AEC yokluğu bir hata değildir (bkz. setup-aec.sh, bu sistemde AEC
+   * düğümü oluşmuyor çünkü WirePlumber ALSA cihazlarını düğüm olarak
+   * yayınlamıyor).
+   */
+  /**
    * Kayit yapilabilecek ALSA cihazlarini oncelik sirasina gore listeler.
    *
    * Neden gerekli: bircok sistemde `default` (PipeWire/PulseAudio) kayit
@@ -147,8 +224,22 @@ export class MicrophoneInput {
    * uretir. Bu durumda hata olusmadigi icin eski kod sonsuza kadar sessiz
    * kalirdi. Burada gercek donanim cihazlari `plughw` uzerinden denenir
    * (S32_LE -> S16_LE donusumunu ALSA yapar).
+   *
+   * SIRA: AEC kaynağı > DMIC > diğer > `default`.
+   * AEC en başta çünkü yankısız giriş, ham donanım girişinden DAHA
+   * kullanışlıdır. Ancak AEC düğümü gerçekten VARSA eklenir; yoksa liste
+   * bugünküyle birebir aynı kalır.
    */
   private static discoverDevices(): string[] {
+    // AEC kaynağı varsa listenin başına koy.
+    const aecSource = detectAecNode('Audio/Source');
+    const aecList: string[] = aecSource ? [aecSource] : [];
+    aecInUse = !!aecSource;
+    if (aecSource) {
+      logInfo('AEC kaynağı bulundu, giriş yankı engellemeye yönlendirildi', {
+        device: aecSource,
+      });
+    }
     // SIRA KRITIK: `default` EN SONA konur.
     // Olculdu (bu makine): PipeWire `default` kaynagi hata vermeden calisir ama
     // neredeyse tamamen DC ofset + kirpilma uretir (DC ~6400/32768, DC-cikarilmis
@@ -184,8 +275,10 @@ export class MicrophoneInput {
       });
     }
 
-    // Hicbir donanim cihazi bulunamazsa son care `default`.
-    return [...dmic, ...other, 'default'];
+    // Sıra: AEC (varsa) → DMIC → diğer donanım → `default` (son çare).
+    const list = [...aecList, ...dmic, ...other, 'default'];
+    logDebug('Kayıt cihazı adayları', { adaylar: list, aec: aecSource ?? 'yok' });
+    return list;
   }
 
   /**
@@ -548,7 +641,31 @@ export class SpeakerOutput {
   private stopped: boolean = false;
 
   constructor(options: SpeakerOptions = {}) {
-    this.device = options.device || process.env.DIJI_AUDIO_OUTPUT_DEVICE || 'default';
+    /*
+     * ÇIKIŞ CİHAZI SEÇİMİ — üç kademeli, son kademe bugünkü davranıştır.
+     *
+     *   1. `options.device` / `DIJI_AUDIO_OUTPUT_DEVICE` — kullanıcı açıkça seçti
+     *   2. AEC sink düğümü — yankı engelleme kuruluysa ses oradan geçmeli,
+     *      yoksa AEC referans sinyali alamaz ve yankıyı silemez
+     *   3. `default` — PipeWire/PulseAudio varsayılanı (mevcut davranış)
+     *
+     * NEDEN 3. kademe şart: bu sistemde PipeWire echo-cancel düğümü
+     * oluşmuyor (bullt: WirePlumber ALSA cihazlarını Audio/Sink olarak
+     * yayınlamıyor). AEC yoksa çıkışın `default` kalması gerekir; aksi halde
+     * hiçbir şey çalınmaz.
+     */
+    const explicit = options.device || process.env.DIJI_AUDIO_OUTPUT_DEVICE;
+    if (explicit) {
+      this.device = explicit;
+    } else {
+      const aecSink = detectAecNode('Audio/Sink');
+      this.device = aecSink ?? 'default';
+      if (aecSink) {
+        logInfo('AEC hedefi bulundu, çıkış yankı engellemeye yönlendirildi', {
+          device: aecSink,
+        });
+      }
+    }
     this.binary = options.binary || process.env.DIJI_APLAY_BIN || 'aplay';
     this.defaultSampleRate = options.sampleRate || AUDIO_SAMPLE_RATE;
   }

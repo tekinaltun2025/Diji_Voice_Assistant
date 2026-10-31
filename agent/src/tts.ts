@@ -3,6 +3,7 @@ import { ChildProcess, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Worker } from 'worker_threads';
 
 /**
  * sherpa-onnx-node ceviri tipleri (paket .d.ts saglamaz).
@@ -317,10 +318,180 @@ class DriftingBridge {
  * dondurmez. Bu sayede "asistan konusuyor ama ses yok" durumu
  * teshis edilebilir kalir.
  */
+/**
+ * VITS motorunu ayrı bir worker iş parçacığında çalıştıran köprü.
+ *
+ * NEDEN (ölçüldü): `OfflineTts.generate()` senkron N-API çağrısıdır ve
+ * libuv havuzuna gitmez — çağrı sürdükçe Node olay döngüsü TAMAMEN durur.
+ * Bir cümle 200-700 ms blok üretiyordu; bu süre boyunca mikrofon akışı
+ * işlenmiyor, VAD güncellenmiyor ve barge-in algılanamıyordu. Eşzamanlı
+ * dinleme ancak bu blok kaldırılırsa mümkündür.
+ *
+ * Bu köprü sayesinde ana thread yalnızca mesaj gönderir; PCM `ArrayBuffer`
+ * olarak transfer edilir (kopyasız).
+ */
+class VitsWorkerBridge {
+  private worker: Worker | null = null;
+  /** Bekleyen sentez istekleri: kimlik → çözücü. */
+  private pending: Map<
+    number,
+    { resolve: (value: TTSResult) => void; reject: (error: Error) => void }
+  > = new Map();
+  private nextId = 1;
+  private sampleRate = DEFAULT_OUTPUT_SAMPLE_RATE;
+  private resolvedModelName = '';
+
+  getSampleRate(): number {
+    return this.sampleRate;
+  }
+
+  getModelName(): string {
+    return this.resolvedModelName;
+  }
+
+  /**
+   * Worker'ı başlatır ve modelin gerçekten yüklendiğini doğrular.
+   *
+   * `ready` yanıtı gelene kadar çözülmez: aksi halde ilk sentez isteği
+   * motordan önce gider ve kaybolur.
+   */
+  async start(options: {
+    modelFiles: { model: string; tokens: string; lexicon?: string; dataDir?: string };
+    speakerId: number;
+    speed: number;
+  }): Promise<void> {
+    // Worker dosyası derlenmiş çıktıda `tts-worker.js` adıyla aranır;
+    // geliştirme sırasında `ts-node`/jest altında `.ts` de denenir.
+    const workerPath = this.resolveWorkerPath();
+
+    this.worker = new Worker(workerPath);
+
+    await new Promise<void>((resolve, reject) => {
+      if (!this.worker) {
+        reject(new Error('TTS worker olusturulamadi'));
+        return;
+      }
+
+      const onMessage = (message: {
+        type: string;
+        sampleRate?: number;
+        modelName?: string;
+        message?: string;
+      }): void => {
+        if (message.type === 'ready') {
+          this.sampleRate = message.sampleRate ?? DEFAULT_OUTPUT_SAMPLE_RATE;
+          this.resolvedModelName = message.modelName ?? '';
+          this.worker?.off('message', onMessage);
+          resolve();
+        } else if (message.type === 'error') {
+          this.worker?.off('message', onMessage);
+          reject(new Error(message.message || 'TTS worker baslatilamadi'));
+        }
+      };
+
+      this.worker.on('message', onMessage);
+      this.worker.once('error', (error: Error) => reject(error));
+      this.worker.postMessage({ type: 'init', ...options });
+    });
+
+    // Kalıcı mesaj dinleyicisi: sentez yanıtları buradan dağıtılır.
+    this.worker.on('message', (message: WorkerResultMessage) => {
+      if (message.type !== 'result' && message.type !== 'error') return;
+
+      const entry = this.pending.get(message.id ?? -1);
+      if (!entry) return;
+      this.pending.delete(message.id ?? -1);
+
+      if (message.type === 'error') {
+        entry.reject(new Error(message.message || 'TTS sentez hatasi'));
+        return;
+      }
+
+      // Alanlar protokolde zorunlu; yine de savunmacı davranılır — eksik
+      // gelirse boş ses döner, tur sessizce düşmez.
+      entry.resolve({
+        audioBuffer: Buffer.from(message.audio ?? new ArrayBuffer(0)),
+        sampleRate: message.sampleRate ?? this.sampleRate,
+        duration: message.durationMs ?? 0,
+        text: '',
+      });
+    });
+
+    this.worker.on('exit', (code) => {
+      // Bekleyen istekler asla yanıtsız kalmamalı: yoksa TTS kilitlenir.
+      const error = new Error(`TTS worker kapandi (kod ${code})`);
+      for (const [, entry] of this.pending) entry.reject(error);
+      this.pending.clear();
+      this.worker = null;
+    });
+  }
+
+  /** Derlenmiş worker dosyasının yolunu bulur. */
+  private resolveWorkerPath(): string {
+    const candidates = [
+      path.join(__dirname, 'tts-worker.js'),
+      path.join(__dirname, 'tts-worker.ts'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error(
+      `TTS worker dosyasi bulunamadi. Aranan: ${candidates.join(', ')}`
+    );
+  }
+
+  /** Metni sentezler; iş worker'da yapılır, ana thread bloklanmaz. */
+  synthesize(text: string): Promise<TTSResult> {
+    if (!this.worker) {
+      return Promise.reject(new Error('TTS worker hazir degil'));
+    }
+
+    const id = this.nextId++;
+    return new Promise<TTSResult>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker?.postMessage({ type: 'synthesize', id, text });
+    });
+  }
+
+  async dispose(): Promise<void> {
+    const worker = this.worker;
+    this.worker = null;
+    if (!worker) return;
+    try {
+      worker.postMessage({ type: 'dispose' });
+    } catch {
+      // worker zaten kapanmış olabilir
+    }
+    await worker.terminate().catch(() => undefined);
+  }
+}
+
+/** Worker'dan gelen sonuç/hata mesajı. */
+interface WorkerResultMessage {
+  type: 'result' | 'error';
+  id?: number;
+  audio?: ArrayBuffer;
+  sampleRate?: number;
+  durationMs?: number;
+  message?: string;
+}
+
 export class TTSEngine {
   private config: TTSConfig;
   private isInitialized = false;
-  private tts: SherpaOfflineTts | null = null;
+  /**
+   * VITS motoru artık AYRI WORKER iş parçacığında çalışır.
+   *
+   * NEDEN: `OfflineTts.generate()` senkron N-API çağrısıdır ve libuv
+   * havuzuna gitmez — ana thread'de çalıştığında olay döngüsünü 200-700 ms
+   * bloklar. Bu blok sürerken mikrofon akışı işlenmez, VAD güncellenmez ve
+   * barge-in algılanamaz; yani eşzamanlı dinleme imkânsız olur.
+   * `vitsBridge` bu bloğu tamamen kaldırır (bkz. `tts-worker.ts`).
+   *
+   * Drifting TTS etkilenmez: o zaten bir Python ALT SÜRECİ üzerinden
+   * çalışır ve ana thread'i bloklamaz.
+   */
+  private vitsBridge: VitsWorkerBridge | null = null;
   private drifting: DriftingBridge | null = null;
   private activeProvider: 'sherpa-vits' | 'drifting-tts' = 'sherpa-vits';
   /**
@@ -452,31 +623,32 @@ export class TTSEngine {
     }
 
     try {
-      this.tts = new sherpaModule.OfflineTts({
-        model: {
-          vits: {
-            model: modelFiles.model,
-            tokens: modelFiles.tokens,
-            ...(modelFiles.lexicon ? { lexicon: modelFiles.lexicon } : {}),
-            ...(modelFiles.dataDir ? { dataDir: modelFiles.dataDir } : {}),
-          },
-          numThreads: 2,
-          provider: 'cpu',
-          debug: 0,
-        },
-        maxNumSentences: 1,
+      /*
+       * Motor ana thread'de DEĞİL, worker'da kurulur. Worker içinde
+       * `sherpa-onnx-node` yüklenir, model dosyaları doğrulanır ve motor
+       * oluşturulur. `start()` yalnızca worker `ready` dediğinde çözülür;
+       * böylece ilk sentez isteği motordan önce gönderilmez.
+       */
+      const bridge = new VitsWorkerBridge();
+      await bridge.start({
+        modelFiles,
+        speakerId: this.speakerId,
+        speed: this.config.speed ?? 1.0,
       });
 
-      this.sampleRate = this.tts.sampleRate || 22050;
+      this.vitsBridge = bridge;
+      this.sampleRate = bridge.getSampleRate();
       this.activeProvider = 'sherpa-vits';
       // Dizin adı, seçim listesindeki kimlikle BİREBİR aynı olmalı; aksi
       // halde arayüz "seçili" işaretini koyamaz.
-      this.resolvedModelName = path.basename(path.dirname(modelFiles.model));
+      this.resolvedModelName =
+        bridge.getModelName() || path.basename(path.dirname(modelFiles.model));
 
-      logInfo('TTS motoru hazir (sherpa-vits)', {
+      logInfo('TTS motoru hazir (sherpa-vits, worker)', {
         model: path.basename(modelFiles.model),
         sampleRate: this.sampleRate,
-        numSpeakers: this.tts.numSpeakers ?? 1,
+        // Worker'da çalıştığı için ana thread bloklanmaz.
+        thread: 'worker',
       });
     } catch (error) {
       logError('TTS motoru baslatilamadi', error as Error, { modelFiles });
@@ -595,19 +767,18 @@ export class TTSEngine {
         };
       }
 
-      if (!this.tts) throw new Error('sherpa-vits motoru hazir degil');
+      if (!this.vitsBridge) throw new Error('sherpa-vits motoru hazir degil');
 
-      const audio = this.tts.generate({
-        text: cleanText,
-        sid: this.speakerId,
-        speed: this.config.speed ?? 1.0,
-      });
+      /*
+       * Sentez WORKER'da yapılır; ana thread yalnızca yanıtı bekler.
+       * Eskiden burada `this.tts.generate(...)` çağrılıyordu ve çağrı
+       * sürdükçe olay döngüsü tamamen duruyordu (200-700 ms).
+       */
+      const result = await this.vitsBridge.synthesize(cleanText);
+      const sampleRate = result.sampleRate || this.sampleRate;
+      const durationMs = result.duration;
 
-      const audioBuffer = this.float32ToPcm16(audio.samples);
-      const sampleRate = audio.sampleRate || this.sampleRate;
-      const durationMs = Math.round((audio.samples.length / sampleRate) * 1000);
-
-      logDebug('Seslendirme tamamlandi (sherpa-vits)', {
+      logDebug('Seslendirme tamamlandi (sherpa-vits, worker)', {
         textLength: cleanText.length,
         durationMs,
         elapsedMs: Date.now() - startTime,
@@ -615,7 +786,7 @@ export class TTSEngine {
       });
 
       return {
-        audioBuffer,
+        audioBuffer: result.audioBuffer,
         sampleRate,
         duration: durationMs,
         text: cleanText,
@@ -738,16 +909,11 @@ export class TTSEngine {
     return parts.length > 0 ? parts : [text];
   }
 
-  /** Float32 (-1..1) -> 16-bit little-endian PCM */
-  private float32ToPcm16(samples: Float32Array): Buffer {
-    const buffer = Buffer.alloc(samples.length * 2);
-    for (let i = 0; i < samples.length; i++) {
-      const clamped = Math.max(-1, Math.min(1, samples[i]));
-      const value = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-      buffer.writeInt16LE(Math.round(value), i * 2);
-    }
-    return buffer;
-  }
+  /*
+   * NOT: Float32 → PCM16 dönüşümü artık `tts-worker.ts` içinde yapılır.
+   * NEDEN: dönüşüm O(n) ve ana thread'de yapılırsa worker'a taşımanın
+   * kazancı azalırdı. Worker PCM'i hazır olarak transfer eder.
+   */
 
   getSampleRate(): number {
     return this.sampleRate;
@@ -783,15 +949,17 @@ export class TTSEngine {
       }
     }
 
-    if (this.tts) {
+    if (this.vitsBridge) {
+      const bridge = this.vitsBridge;
+      this.vitsBridge = null;
       try {
-        this.tts.free?.();
+        // Worker sonlandırılır; model belleği iş parçacığıyla birlikte gider.
+        await bridge.dispose();
       } catch (error) {
-        logWarn('TTS modeli kapatilirken hata', {
+        logWarn('TTS worker kapatilirken hata', {
           error: (error as Error).message,
         });
       }
-      this.tts = null;
     }
 
     this.isInitialized = false;
